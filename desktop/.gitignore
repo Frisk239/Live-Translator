@@ -1,0 +1,21 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/schemas/
+.env
+.env.*
+# 本机 MSVC 路径等 cargo 本地覆盖，不进仓；参照 config.toml.example
+src-tauri/.cargo/config.toml
+# 安装包内置 Python（prepare_runtime.py 生成）
+src-tauri/runtime/
+# 模型与缓存不入仓
+models/
+*.onnx
+# 临时验证产物
+shot-*.png
+*.log
+llm.local.json
+__pycache__/
+.pytest_cache/
+handles.txt
+manual-test-materials/quality-probe-report.json

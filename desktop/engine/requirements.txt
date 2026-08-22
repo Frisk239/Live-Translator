@@ -1,0 +1,6 @@
+numpy
+websockets
+sherpa-onnx
+onnxruntime
+tokenizers
+ctranslate2

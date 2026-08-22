@@ -1,0 +1,146 @@
+/* 字幕窗：透明、无按钮；样式由控制面板广播（描边 / 黄字 / 黑底） */
+html, body {
+  margin: 0;
+  background: transparent;
+  overflow: hidden;
+  user-select: none;
+}
+
+.subtitle-win {
+  --subsize: 30px;
+  box-sizing: border-box;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 14px 16px 20px;
+  text-align: center;
+  font-family: var(--subfont, "Microsoft YaHei", "Segoe UI", system-ui, sans-serif);
+}
+
+.sub-stack {
+  box-sizing: border-box;
+  width: max-content;
+  max-width: 100%;
+  min-width: 0;
+  background: var(--subplate, transparent);
+  border-radius: 10px;
+  padding: var(--subpad, 0);
+}
+
+.sub-orig,
+.sub-trans {
+  box-sizing: border-box;
+  width: 100%;
+  color: var(--subink, #fff);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  text-shadow: var(--subshadow,
+    -1px -1px 0 rgba(0, 0, 0, 0.92), 1px -1px 0 rgba(0, 0, 0, 0.92),
+    -1px 1px 0 rgba(0, 0, 0, 0.92), 1px 1px 0 rgba(0, 0, 0, 0.92),
+    0 2px 5px rgba(0, 0, 0, 0.7));
+}
+
+.sub-trans {
+  font-size: var(--subsize);
+  font-weight: var(--subweight, 600);
+}
+
+.sub-orig {
+  font-size: calc(var(--subsize) * 0.62);
+  font-weight: 400;
+  opacity: 0.92;
+  margin-bottom: 4px;
+}
+
+.subtitle-win.solo-orig .sub-orig {
+  font-size: var(--subsize);
+  font-weight: var(--subweight, 600);
+  opacity: 1;
+  margin-bottom: 0;
+}
+
+.sub-orig:empty, .sub-trans:empty { display: none; }
+
+.draft { opacity: 0.66; }
+.draft::after {
+  content: "▍";
+  margin-left: 2px;
+  color: #e8a34d;
+  animation: caret 1.06s steps(2, jump-none) infinite;
+}
+@keyframes caret { 0% { opacity: 1; } 100% { opacity: 0.15; } }
+.final { opacity: 1; }
+
+.sub-hint {
+  display: inline-block;
+  font-size: 15px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(8, 8, 12, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 6px 14px;
+  margin-bottom: 6px;
+  backdrop-filter: blur(4px);
+}
+.sub-hint:empty { display: none; }
+
+.sub-handles { opacity: 0; transition: opacity 0.15s; }
+.subtitle-win.hovered .sub-handles { opacity: 1; }
+
+.sub-frame {
+  position: absolute;
+  inset: 0;
+  border: 1px solid rgba(255, 255, 255, 0.42);
+  border-radius: 10px;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+
+.sub-grip {
+  position: absolute;
+  z-index: 4;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 18px;
+  border-radius: 999px;
+  background: rgba(10, 10, 14, 0.88);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  color: rgba(255, 255, 255, 0.9);
+  font-size: 13px;
+  letter-spacing: 2px;
+  cursor: grab;
+}
+.sub-grip:active { cursor: grabbing; }
+
+.sub-edge {
+  position: absolute;
+  z-index: 2;
+}
+.sub-edge.n { top: 0; left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
+.sub-edge.s { bottom: 0; left: 14px; right: 14px; height: 8px; cursor: ns-resize; }
+.sub-edge.e { top: 14px; right: 0; bottom: 14px; width: 8px; cursor: ew-resize; }
+.sub-edge.w { top: 14px; left: 0; bottom: 14px; width: 8px; cursor: ew-resize; }
+
+.sub-corner {
+  position: absolute;
+  z-index: 3;
+  width: 14px;
+  height: 14px;
+}
+.sub-corner.nw { top: 0; left: 0; cursor: nwse-resize; }
+.sub-corner.ne { top: 0; right: 0; cursor: nesw-resize; }
+.sub-corner.sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.sub-corner.se {
+  right: 4px;
+  bottom: 4px;
+  width: 16px;
+  height: 16px;
+  cursor: nwse-resize;
+  border-right: 3px solid rgba(255, 255, 255, 0.7);
+  border-bottom: 3px solid rgba(255, 255, 255, 0.7);
+  border-radius: 0 0 4px 0;
+}

@@ -1,0 +1,45 @@
+[package]
+name = "live-translator-desktop"
+version = "0.1.4"
+authors = ["LiveTranslator"]
+description = "直播同传工具：观众在自己电脑上把外语直播听译成简体中文字幕"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+tauri-plugin-store = "2"
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["time", "sync"] }
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+rand = "0.8"
+windows = { version = "0.61", features = [
+  "Win32_UI_WindowsAndMessaging",
+  "Win32_Foundation",
+  "Win32_System_Com",
+  "Win32_System_Com_StructuredStorage",
+  "Win32_System_Variant",
+  "Win32_System_Threading",
+  "Win32_System_JobObjects",
+  "Win32_Security",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_Media_Audio",
+  "Win32_Media_Audio_Endpoints",
+] }
+windows-core = "0.61"
+reqwest = { version = "0.12", default-features = false, features = ["stream", "rustls-tls"] }
+
+[profile.release]
+strip = true
+lto = true
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tauri = { version = "2", features = ["test"] }

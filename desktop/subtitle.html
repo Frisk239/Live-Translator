@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>字幕</title>
+<link rel="stylesheet" href="/src/subtitle.css">
+</head>
+<body>
+<div class="subtitle-win" id="subtitleWin">
+  <div class="sub-handles" id="subHandles">
+    <div class="sub-frame" aria-hidden="true"></div>
+    <div class="sub-grip" data-tauri-drag-region title="拖动移位置">⠿</div>
+    <div class="sub-edge n" data-resize="North" title="拖动改大小"></div>
+    <div class="sub-edge s" data-resize="South" title="拖动改大小"></div>
+    <div class="sub-edge e" data-resize="East" title="拖动改大小"></div>
+    <div class="sub-edge w" data-resize="West" title="拖动改大小"></div>
+    <div class="sub-corner nw" data-resize="NorthWest" title="拖动改大小"></div>
+    <div class="sub-corner ne" data-resize="NorthEast" title="拖动改大小"></div>
+    <div class="sub-corner sw" data-resize="SouthWest" title="拖动改大小"></div>
+    <div class="sub-corner se" data-resize="SouthEast" title="拖动改大小"></div>
+  </div>
+  <div class="sub-stack" id="subStack">
+    <div class="sub-hint" id="subHint"></div>
+    <div class="sub-orig" id="subOrig"></div>
+    <div class="sub-trans" id="subTrans"></div>
+  </div>
+</div>
+<script type="module" src="/src/subtitle.ts"></script>
+</body>
+</html>

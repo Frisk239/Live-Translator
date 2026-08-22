@@ -1,0 +1,14 @@
+# 本机 MSVC 工具链在 E 盘（VS 2022 Community + Windows SDK 10.0.22621.0），
+# 不在默认 PATH 里。Git Bash 的 GNU link.exe 会抢名，所以 linker 用绝对路径，
+# rc.exe 用 RC 环境变量指给 tauri-winres。VS 装在别处的话改这里。
+
+[target.x86_64-pc-windows-msvc]
+linker = 'E:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64\link.exe'
+
+[env]
+LIB = 'E:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\lib\x64;E:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\um\x64;E:\Program Files (x86)\Windows Kits\10\Lib\10.0.22621.0\ucrt\x64'
+INCLUDE = 'E:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\include;E:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\ucrt;E:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\um;E:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\shared;E:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\winrt;E:\Program Files (x86)\Windows Kits\10\Include\10.0.22621.0\cppwinrt'
+RC = 'E:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe'
+CC = 'E:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64\cl.exe'
+CXX = 'E:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64\cl.exe'
+AR = 'E:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.42.34433\bin\Hostx64\x64\lib.exe'

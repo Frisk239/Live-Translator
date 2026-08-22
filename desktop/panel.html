@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>直播同传工具</title>
+<link rel="stylesheet" href="/src/panel.css">
+</head>
+<body>
+<div class="panel">
+  <div class="panel-titlebar" data-tauri-drag-region>
+    <span class="panel-name">直播同传工具</span>
+    <div class="panel-window-controls">
+      <button class="panel-minimize" id="panelMinimize" type="button" title="最小化到任务栏" aria-label="最小化到任务栏">−</button>
+      <button class="panel-close" id="panelClose" type="button" title="藏起面板（开听不会停）" aria-label="藏起控制面板">×</button>
+    </div>
+  </div>
+  <div class="panel-body" id="panelBody"></div>
+  <div class="panel-footer" id="panelFooter"></div>
+</div>
+<script type="module" src="/src/panel.ts"></script>
+</body>
+</html>

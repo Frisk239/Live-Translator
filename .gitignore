@@ -1,0 +1,11 @@
+reference/
+docs/
+chanpin/
+desktop/llm.local.json
+.build_mats/
+**/__pycache__/
+**/.pytest_cache/
+*.pyc
+*.log
+desktop/handles.txt
+desktop/manual-test-materials/quality-probe-report.json
