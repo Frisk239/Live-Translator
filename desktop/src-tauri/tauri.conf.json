@@ -53,7 +53,8 @@
     "publisher": "LiveTranslator",
     "resources": {
       "runtime/python": "python",
-      "runtime/engine": "engine"
+      "runtime/engine": "engine",
+      "runtime/listen": "listen"
     },
     "windows": {
       "nsis": {

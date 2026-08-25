@@ -32,6 +32,7 @@ NEEDED = [
 ]
 if not all(path.is_file() for path in NEEDED):
     pytest.skip("本机没有真听译模型", allow_module_level=True)
+pytest.importorskip("sherpa_onnx")
 
 
 def load_speech_pcm() -> "np.ndarray":

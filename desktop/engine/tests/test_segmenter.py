@@ -10,12 +10,8 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "engine"))
-import importlib.util
-
-spec = importlib.util.spec_from_file_location("real_listen", Path(__file__).resolve().parents[2] / "engine" / "real_listen.py")
-rl = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(rl)
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+from listen import engine as rl  # noqa: E402
 
 
 def new_seg(now=0.0):
@@ -694,14 +690,26 @@ def test_llm_config_accepts_camel_or_snake():
 
 
 def test_llm_thinking_fields_follow_probed_param():
+    # disable_thinking=True 是 400 兜底的重试路径：真正把思考字段去掉
     assert rl._llm_thinking_fields(
         {"thinking_param": "reasoning_effort", "thinking": "low"}, True
+    ) == {}
+    assert rl._llm_thinking_fields(
+        {"thinking_param": "reasoning_effort", "thinking": "low"}, False
     ) == {"reasoning_effort": "low"}
-    assert rl._llm_thinking_fields({"thinking_param": "thinking", "thinking": "off"}, True) == {
+    assert rl._llm_thinking_fields({"thinking_param": "thinking", "thinking": "off"}, False) == {
         "thinking": "off"
     }
-    assert rl._llm_thinking_fields({"thinking_param": "", "thinking": ""}, True) == {}
-    assert rl._llm_thinking_fields({"thinking_param": "thinking", "thinking": ""}, True) == {}
+    assert rl._llm_thinking_fields(
+        {"thinking_param": "enable_thinking", "thinking": "false"}, False
+    ) == {"enable_thinking": False}
+    # 没探测到也不吃接口默认：按最通用的参数带最低档，接口不认由 400 兜底去掉
+    assert rl._llm_thinking_fields({"thinking_param": "", "thinking": ""}, False) == {
+        "reasoning_effort": "low"
+    }
+    assert rl._llm_thinking_fields({"thinking_param": "thinking", "thinking": ""}, False) == {
+        "reasoning_effort": "low"
+    }
 
 
 def test_incremental_suffix_planner():
@@ -773,6 +781,7 @@ def test_english_fixture_never_emits_japanese_orig(monkeypatch):
     ]
     if not all(path.is_file() for path in needed):
         pytest.skip("本机没有真听译模型")
+    pytest.importorskip("sherpa_onnx")
 
     # 这条回归只验证识别和语言门；不加载 OPUS，避免把翻译耗时混入回归信号。
     class StubTranslator:
@@ -860,6 +869,7 @@ def test_real_engine_keeps_japanese_and_korean_fixtures_in_their_source_language
     ]
     if not all(path.is_file() for path in needed):
         pytest.skip("本机没有真听译模型")
+    pytest.importorskip("sherpa_onnx")
 
     class StubTranslator:
         def __init__(self, _models):

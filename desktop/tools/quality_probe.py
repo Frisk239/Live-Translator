@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import importlib.util
 import json
 import os
 import re
@@ -217,9 +216,11 @@ def percentile(values: list[float], p: float) -> float | None:
 # ---------- 开口定位（与引擎同一只 Silero VAD） ----------
 
 def load_engine_module():
-    spec = importlib.util.spec_from_file_location("real_listen_probe", ROOT / "engine" / "real_listen.py")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    repo = ROOT.parent
+    if str(repo) not in sys.path:
+        sys.path.insert(0, str(repo))
+    from listen import engine as module
+
     return module
 
 

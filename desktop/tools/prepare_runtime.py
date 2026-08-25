@@ -17,9 +17,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REQ = ROOT / "engine" / "requirements.txt"
 ENGINE_SRC = ROOT / "engine" / "real_listen.py"
+LISTEN_SRC = ROOT.parent / "listen"
 RUNTIME = ROOT / "src-tauri" / "runtime"
 OUT = RUNTIME / "python"
 ENGINE_OUT = RUNTIME / "engine"
+LISTEN_OUT = RUNTIME / "listen"
 PY_VER = "3.12.10"
 ZIP_NAME = f"python-{PY_VER}-embed-amd64.zip"
 PY_URLS = (
@@ -113,6 +115,13 @@ def pip_install() -> None:
 def sync_engine() -> None:
     ENGINE_OUT.mkdir(parents=True, exist_ok=True)
     shutil.copy2(ENGINE_SRC, ENGINE_OUT / "real_listen.py")
+    if LISTEN_OUT.exists():
+        shutil.rmtree(LISTEN_OUT)
+    shutil.copytree(
+        LISTEN_SRC,
+        LISTEN_OUT,
+        ignore=shutil.ignore_patterns("__pycache__", "tests", "*.pyc"),
+    )
 
 
 def main() -> int:
