@@ -5,7 +5,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isListenEvent } from "./core/events";
 import { initialShellState, panelViewChanged, reduce, type Phase, type ShellState } from "./core/reducer";
-import { listenPane, type AccountSession } from "./core/hosted";
+import { DEFAULT_HOSTED_ORIGIN, hostedOrigin, listenPane, postAccount, type AccountSession } from "./core/hosted";
 import {
   applySettingsChange,
   loadSettings,
@@ -29,6 +29,9 @@ interface BootInfo {
   sourceDead: boolean;
   weak: boolean;
   phase: Phase;
+  hostedOrigin?: string;
+  hostedAccount?: AccountSession;
+  hostedRemembered?: boolean;
 }
 
 let shell: ShellState = initialShellState();
@@ -41,9 +44,15 @@ let fetchingSources = false;
 let sourceRefreshFeedback = "";
 let panelTab: "listen" | "llm" | "account" = "listen";
 let account: AccountSession = null;
+/** 登录是否记在这台电脑上：改密码换新 token 时要不要重写凭据 */
+let accountRemembered = false;
 let loginDraft = { email: "", password: "", remember: false };
 let loginNote = "";
 let loginBusy = false;
+let pwdDraft = { old: "", fresh: "" };
+let pwdNote = "";
+let pwdNoteOk = false;
+let pwdBusy = false;
 let llmDraft = {
   enabled: false,
   baseUrl: "https://opencode.ai/zen/go/v1",
@@ -53,15 +62,23 @@ let llmDraft = {
   thinkingParam: "",
 };
 let llmModels: string[] = [];
-let llmThinkOptions: { id: string; label: string; param: string; value: string }[] = [];
 let llmNote = "";
 let llmBusy = false;
-const HOSTED_ORIGIN = "http://127.0.0.1:8787";
+/** DOM 内自绘下拉当前是否展开：透明窗里原生 datalist 弹层渲染不出来 */
+let llmCombo = false;
+/** 展开后输入的过滤词；打开时为空＝显示全部，打着字才收窄 */
+let llmComboQuery = "";
+
+function closeCombo() {
+  llmCombo = false;
+  llmComboQuery = "";
+}
+let hostedOriginUrl = DEFAULT_HOSTED_ORIGIN;
 const SOURCE_AUTO_REFRESH_MS = 2_000;
 
 const body = document.getElementById("panelBody")!;
 const footer = document.getElementById("panelFooter")!;
-const panelRoot = document.querySelector(".panel")!;
+const panelRoot = document.querySelector(".panel")! as HTMLElement;
 
 async function getBootWhenReady(): Promise<BootInfo> {
   // Tauri 会先创建 WebView 再跑壳的 setup；热重编时 get_boot 偶尔比状态注册更早到。
@@ -89,6 +106,15 @@ function snapshotLoginDraft() {
   if (password !== undefined) loginDraft.password = password;
 }
 
+function snapshotAccountDraft() {
+  if (panelTab !== "account") return;
+  const val = (id: string) => (document.getElementById(id) as HTMLInputElement | null)?.value;
+  const old = val("pwdOld");
+  if (old !== undefined) pwdDraft.old = old;
+  const fresh = val("pwdFresh");
+  if (fresh !== undefined) pwdDraft.fresh = fresh;
+}
+
 function snapshotLlmDraft() {
   if (panelTab !== "llm") return;
   // 切进译文页的那一帧，DOM 还是听译页、没有这些输入框；
@@ -100,10 +126,6 @@ function snapshotLlmDraft() {
   if (model) llmDraft.model = model;
   const apiKey = val("llmApiKey");
   if (apiKey !== undefined) llmDraft.apiKey = apiKey;
-  const thinkParam = val("llmThinkParam");
-  if (thinkParam !== undefined) llmDraft.thinkingParam = thinkParam;
-  const thinkVal = val("llmThinkValue");
-  if (thinkVal !== undefined) llmDraft.thinking = thinkVal;
 }
 
 function paint(html: string, footerHtml: string, keepScroll: boolean) {
@@ -116,6 +138,7 @@ function paint(html: string, footerHtml: string, keepScroll: boolean) {
 function render(keepScroll = false) {
   snapshotLoginDraft();
   snapshotLlmDraft();
+  snapshotAccountDraft();
   const phase = shell.phase;
   const items: string[] = [];
 
@@ -140,7 +163,7 @@ function render(keepScroll = false) {
     return;
   }
 
-  if (settings.listenWay === "hosted") items.push(wayBlock());
+  items.push(wayBlock());
 
   if (listenPane(settings.listenWay, account) === "login") {
     items.push(loginBlock());
@@ -199,43 +222,75 @@ function loginBlock(): string {
 }
 
 function accountBlock(): string {
+  if (!account) {
+    return `<section class="preferences" aria-label="个人中心">
+      <div class="preferences-cap">个人中心</div>
+      <p class="llm-lead">还没登录。去听译页选托管即可登录。</p>
+    </section>`;
+  }
   return `<section class="preferences" aria-label="个人中心">
     <div class="preferences-cap">个人中心</div>
-    <p class="llm-lead">${esc(account?.email ?? "")}</p>
+    <p class="llm-lead">${esc(account.email)}</p>
+    <div class="pref-divider"></div>
+    <div class="preferences-cap">改密码</div>
+    <label class="field"><span>旧密码</span>
+      <input id="pwdOld" type="password" autocomplete="current-password" spellcheck="false" value="${esc(pwdDraft.old)}">
+    </label>
+    <label class="field"><span>新密码</span>
+      <input id="pwdFresh" type="password" autocomplete="new-password" spellcheck="false" value="${esc(pwdDraft.fresh)}">
+    </label>
+    <div class="note-acts llm-acts">
+      <button data-act="password" ${pwdBusy ? "disabled" : ""}>改密码</button>
+    </div>
+    <p class="llm-lead">改完其它电脑上的登录会退出。</p>
+    ${pwdNote ? `<div class="note ${pwdNoteOk ? "ok-note" : "warn"}">${esc(pwdNote)}</div>` : ""}
+    <div class="pref-divider"></div>
     <div class="note-acts llm-acts">
       <button data-act="logout">退出</button>
     </div>
   </section>`;
 }
 
-function modelField(): string {
-  const list = llmModels.length
-    ? `<datalist id="llmModelList">${llmModels.map((id) => `<option value="${esc(id)}">`).join("")}</datalist>`
-    : "";
-  return `<label class="field"><span>模型</span>
-    <input id="llmModel" list="llmModelList" type="text" autocomplete="off" spellcheck="false" value="${esc(llmDraft.model)}" placeholder="拉模型后可下拉，也可手写">
+/** 输入框 + 自绘下拉。输入内容即过滤词；点输入框展开/收起；选项点了写回草稿。 */
+function comboField(id: string, cap: string, value: string, placeholder: string, all: string[]): string {
+  const q = llmCombo ? llmComboQuery.trim().toLowerCase() : "";
+  const shown = (q ? all.filter((o) => o.toLowerCase().includes(q)) : all).slice(0, 80);
+  const count = all.length ? `<small style="float:right;font-weight:400">${all.length} 个可选</small>` : "";
+  const list =
+    llmCombo && shown.length
+      ? `<div class="combo-list">${shown
+          .map(
+            (o) =>
+              `<button type="button" class="combo-opt${o === value ? " sel" : ""}" data-act="combo-pick" data-v="${esc(o)}" title="${esc(o)}">${esc(o)}</button>`,
+          )
+          .join("")}</div>`
+      : "";
+  return `<label class="field combo-wrap"><span>${cap}${count}</span>
+    <input id="${id}" data-combo="model" type="text" autocomplete="off" spellcheck="false" value="${esc(value)}" placeholder="${placeholder}">
     ${list}
   </label>`;
 }
 
-function thinkField(): string {
-  const params = [...new Set(llmThinkOptions.map((o) => o.param).filter(Boolean))];
-  const values = [...new Set(llmThinkOptions.map((o) => o.value).filter(Boolean))];
-  const paramList = params.length
-    ? `<datalist id="llmThinkParamList">${params.map((p) => `<option value="${esc(p)}">`).join("")}</datalist>`
-    : "";
-  const valueList = values.length
-    ? `<datalist id="llmThinkValueList">${values.map((v) => `<option value="${esc(v)}">`).join("")}</datalist>`
-    : "";
-  return `<label class="field"><span>思考字段</span>
-    <input id="llmThinkParam" list="llmThinkParamList" type="text" autocomplete="off" spellcheck="false" value="${esc(llmDraft.thinkingParam)}" placeholder="放空则不传">
-    ${paramList}
-  </label>
-  <label class="field"><span>思考档</span>
-    <input id="llmThinkValue" list="llmThinkValueList" type="text" autocomplete="off" spellcheck="false" value="${esc(llmDraft.thinking)}" placeholder="放空则用模型默认">
-    ${valueList}
-  </label>
-  <p class="llm-lead">听译要快，建议填关闭或低档（off / low / none）。各模型默认档不同，放空会走接口默认，可能很慢。</p>`;
+function refocusField(id: string) {
+  const el = document.getElementById(id) as HTMLInputElement | null;
+  if (el) {
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  }
+}
+
+/** 下拉往输入框下方展开：快到面板底部时把输入框滚到中部，给列表腾地方 */
+function ensureComboRoom(id: string) {
+  const el = document.getElementById(id);
+  const body = document.querySelector(".panel-body");
+  if (!el || !body) return;
+  const er = el.getBoundingClientRect();
+  const br = body.getBoundingClientRect();
+  if (er.bottom + 190 > br.bottom) el.scrollIntoView({ block: "center" });
+}
+
+function modelField(): string {
+  return comboField("llmModel", "模型", llmDraft.model, "拉模型后点输入框可选，也可手写", llmModels);
 }
 
 function llmBlock(): string {
@@ -258,10 +313,9 @@ function llmBlock(): string {
     </label>
     <div class="note-acts llm-acts">
       <button data-act="llm-models" ${llmBusy ? "disabled" : ""}>拉模型</button>
-      <button data-act="llm-think" ${llmBusy ? "disabled" : ""}>探测思考</button>
     </div>
     ${modelField()}
-    ${thinkField()}
+    <p class="llm-lead">思考强度自动按最低档配置，接口不认会自动去掉，不用管。</p>
     <div class="note-acts llm-acts">
       <button data-act="llm-save" ${llmBusy ? "disabled" : ""}>保存</button>
       <button data-act="llm-test" ${llmBusy ? "disabled" : ""}>试连</button>
@@ -385,31 +439,86 @@ async function submitAccount(kind: "login" | "register") {
   loginNote = "";
   render();
   try {
-    const res = await fetch(`${HOSTED_ORIGIN}/account/${kind}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        email: loginDraft.email,
-        password: loginDraft.password,
-        rememberMe: loginDraft.remember,
-      }),
+    const { status, payload } = await postAccount(hostedOriginUrl, kind, {
+      email: loginDraft.email,
+      password: loginDraft.password,
+      rememberMe: loginDraft.remember,
     });
-    const payload = await res.json().catch(() => ({} as { email?: string; error?: string }));
-    if (!res.ok) {
-      loginNote = payload.error || "没连上托管。";
+    if (status !== 200 || !payload.email || !payload.token) {
+      loginNote = (status !== 200 && payload.error) || "没连上托管。";
       return;
     }
-    if (!payload.email) {
-      loginNote = "没连上托管。";
-      return;
+    account = { email: payload.email, token: payload.token };
+    accountRemembered = loginDraft.remember;
+    try {
+      await invoke("save_hosted_session", {
+        email: account.email,
+        token: account.token,
+        remember: loginDraft.remember,
+      });
+    } catch {
+      loginNote = "登录成功，但没能记住这台电脑。";
     }
-    account = { email: payload.email };
     loginDraft.password = "";
     panelTab = "listen";
   } catch {
     loginNote = "没连上托管。";
   } finally {
     loginBusy = false;
+    render();
+  }
+}
+
+async function submitPasswordChange() {
+  if (!account) return;
+  snapshotAccountDraft();
+  if (!pwdDraft.old || !pwdDraft.fresh) {
+    pwdNote = "先填旧密码和新密码。";
+    pwdNoteOk = false;
+    render();
+    return;
+  }
+  pwdBusy = true;
+  pwdNote = "";
+  render();
+  try {
+    const { status, payload } = await postAccount(hostedOriginUrl, "password", {
+      token: account.token,
+      oldPassword: pwdDraft.old,
+      newPassword: pwdDraft.fresh,
+    });
+    if (status === 200 && payload.token) {
+      // 本机换新 token 仍保持登录；凭据库里也换成新 token（ADR 0028）
+      account = { email: payload.email || account.email, token: payload.token };
+      try {
+        await invoke("save_hosted_session", {
+          email: account.email,
+          token: account.token,
+          remember: accountRemembered,
+        });
+      } catch {
+        /* 记不住也已在内存换好新 token */
+      }
+      pwdDraft = { old: "", fresh: "" };
+      pwdNote = "密码改好了。其它电脑上的登录已退出。";
+      pwdNoteOk = true;
+    } else if (payload.error?.includes("旧密码")) {
+      pwdNote = "旧密码不对。";
+      pwdNoteOk = false;
+    } else if (status === 401) {
+      pwdNote = "";
+      account = null;
+      panelTab = "listen";
+      void invoke("clear_hosted_session");
+    } else {
+      pwdNote = payload.error || "没连上托管。";
+      pwdNoteOk = false;
+    }
+  } catch {
+    pwdNote = "没连上托管。";
+    pwdNoteOk = false;
+  } finally {
+    pwdBusy = false;
     render();
   }
 }
@@ -430,9 +539,40 @@ function dispatch(next: ShellState) {
 panelRoot.addEventListener("input", (e) => {
   const el = e.target as HTMLInputElement;
   if (el.id === "inkCustom" && el.value) void invoke("set_ink", { ink: el.value });
+  if (el.dataset?.combo && llmCombo) {
+    // 打字收窄下拉；重绘后把焦点和光标放回输入框
+    llmComboQuery = el.value;
+    snapshotLlmDraft();
+    render(true);
+    refocusField(el.id);
+  }
+});
+
+panelRoot.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (e.key === "Escape" && llmCombo) {
+    closeCombo();
+    render(true);
+  }
 });
 
 panelRoot.addEventListener("click", (e) => {
+  const raw = e.target as HTMLElement;
+  const comboInput = raw.closest<HTMLElement>("[data-combo]");
+  if (comboInput) {
+    if (!llmCombo) {
+      llmCombo = true;
+      llmComboQuery = ""; // 打开时显示全部，别拿已选的值当过滤词
+    }
+    snapshotLlmDraft();
+    render(true);
+    ensureComboRoom(comboInput.id);
+    refocusField(comboInput.id);
+    return;
+  }
+  if (llmCombo && !raw.closest(".combo-list")) {
+    closeCombo();
+    render(true);
+  }
   const el = (e.target as HTMLElement).closest<HTMLElement>("[data-act]");
   if (!el || el.hasAttribute("disabled")) return;
   const act = el.dataset.act;
@@ -454,14 +594,23 @@ panelRoot.addEventListener("click", (e) => {
   }
   else if (act === "login") void submitAccount("login");
   else if (act === "register") void submitAccount("register");
+  else if (act === "password") void submitPasswordChange();
   else if (act === "account") {
     snapshotLoginDraft();
+    pwdNote = "";
     panelTab = "account";
     render();
   }
   else if (act === "logout") {
+    // 服务端把这枚 token 作废（顺带停掉它开的听译），再清这台的登录
+    const token = account?.token;
+    if (token) void postAccount(hostedOriginUrl, "logout", { token }).catch(() => {});
     account = null;
+    accountRemembered = false;
+    pwdDraft = { old: "", fresh: "" };
+    pwdNote = "";
     panelTab = "listen";
+    void invoke("clear_hosted_session");
     render();
   }
   else if (act === "src" && el.dataset.id) void selectSource(el.dataset.id);
@@ -477,7 +626,6 @@ panelRoot.addEventListener("click", (e) => {
   else if (act === "autostart") void invoke("set_autostart", { on: !settings.autostart });
   else if (act === "startstop") {
     if (shell.phase === "listening") void invoke("listen_stop");
-    else if (settings.listenWay === "hosted") return;
     else if (settings.source && !sourceDead) void invoke("listen_start", { source: settings.source });
   } else if (act === "use-system") {
     // 音源抓不到的出路：改用系统混音并立刻重开听，不用再按一次开听
@@ -494,7 +642,12 @@ panelRoot.addEventListener("click", (e) => {
   } else if (act === "llm-save") void saveLlm();
   else if (act === "llm-test") void testLlm();
   else if (act === "llm-models") void listLlmModels();
-  else if (act === "llm-think") void probeLlmThinking();
+  else if (act === "combo-pick" && el.dataset.v) {
+    snapshotLlmDraft();
+    llmDraft.model = el.dataset.v;
+    closeCombo();
+    render();
+  }
 });
 
 function llmPayload() {
@@ -523,7 +676,14 @@ async function listLlmModels() {
     if (r.ok && llmModels.length && !llmModels.includes(llmDraft.model)) {
       llmDraft.model = llmModels[0];
     }
+    // 拉到就展开给全部列表：观众不用再找下拉在哪
+    llmCombo = r.ok && llmModels.length > 0;
+    llmComboQuery = "";
     llmNote = r.preview || "拉模型结束。";
+    if (r.ok && llmModels.length) {
+      const probeNote = await autoProbeThinking();
+      if (probeNote) llmNote = `${llmNote} ${probeNote}`;
+    }
   } catch {
     llmNote = "拉模型失败。";
   } finally {
@@ -532,28 +692,22 @@ async function listLlmModels() {
   }
 }
 
-async function probeLlmThinking() {
-  llmBusy = true;
-  llmNote = "";
-  render();
+/** 思考强度后台自动配：探测接口认哪个参数，直接挑最低档写进存档，观众无感。 */
+async function autoProbeThinking(): Promise<string | null> {
   try {
-    const r = await invoke<{
+    const p = await invoke<{
       ok: boolean;
       preview: string;
-      options: { id: string; label: string; param: string; value: string }[];
+      recommended: { param: string; value: string } | null;
     }>("probe_llm_thinking", { config: llmPayload() });
-    llmThinkOptions = (r.options || []).map((o) => ({
-      id: o.id,
-      label: o.label,
-      param: o.param || "",
-      value: o.value || "",
-    }));
-    llmNote = r.preview || "探测结束。";
+    if (p.ok && p.recommended?.param) {
+      llmDraft.thinkingParam = p.recommended.param;
+      llmDraft.thinking = p.recommended.value;
+      return `思考已自动调到最低（${p.recommended.param} · ${p.recommended.value}）。`;
+    }
+    return "思考按最通用参数带最低档，接口不认会自动去掉。";
   } catch {
-    llmNote = "探测思考失败。";
-  } finally {
-    llmBusy = false;
-    render();
+    return null;
   }
 }
 
@@ -654,6 +808,11 @@ async function main() {
   sources = boot.sources;
   sourceDead = boot.sourceDead;
   weak = boot.weak;
+  hostedOriginUrl = hostedOrigin(boot.hostedOrigin);
+  if (boot.hostedAccount?.email && boot.hostedAccount.token) {
+    account = boot.hostedAccount;
+    accountRemembered = !!boot.hostedRemembered;
+  }
   shell = reduce(initialShellState(), {
     type: "phase",
     phase: boot.phase,
@@ -695,13 +854,21 @@ async function main() {
     dispatch(reduce(shell, { type: "download", pct: e.payload as number }));
   });
   await listen("app://source_switched", (e) => {
-    const p = e.payload as { sourceLabel: string; now: number };
-    dispatch(reduce(shell, { type: "source_switched", sourceLabel: p.sourceLabel, now: p.now }));
+    const p = e.payload as { sourceLabel: string };
+    dispatch(reduce(shell, { type: "source_switched", sourceLabel: p.sourceLabel, now: performance.now() }));
   });
   await listen("app://source_gone", () => {
     dispatch(reduce(shell, { type: "source_gone" }));
     // 音源没了，列表里的旧行也该消失
     void refreshSources(true);
+  });
+  await listen("hosted://account", (e) => {
+    // 壳侧清了登录（登录失效 / 退出）：面板跟着回登录页
+    if (e.payload == null && account) {
+      account = null;
+      accountRemembered = false;
+      render();
+    }
   });
   await listen("settings://changed", (e) => {
     const next = applySettingsChange(

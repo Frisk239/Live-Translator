@@ -248,3 +248,20 @@ button:focus-visible { outline: 2px solid rgba(232, 163, 77, 0.85); outline-offs
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
+
+/* DOM 内自绘下拉：透明窗里原生 datalist/select 弹层渲染不出来，模型选择等都用这套 */
+.combo-wrap { position: relative; }
+.combo-list {
+  position: absolute; left: 0; right: 0; top: 100%; z-index: 30;
+  margin-top: 4px; max-height: 184px; overflow-y: auto; padding: 4px;
+  background: #26262f; border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.55);
+}
+.combo-opt {
+  display: block; width: 100%; text-align: left; padding: 6px 8px;
+  border: none; border-radius: 6px; background: transparent; color: var(--text);
+  font-size: 12px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.combo-opt:hover { background: rgba(255, 255, 255, 0.08); }
+.combo-opt.sel { color: #fff; background: rgba(255, 255, 255, 0.12); }

@@ -231,5 +231,32 @@ function applyNotice(state: ShellState, kind: NoticeKind): ShellState {
         failureKind: "crashed",
         panelStatus: { kind: "err", text: "听译停了。点开听重试。" },
       };
+    case "kicked":
+      // 被顶：同一账号在别处开了托管听译。停听撤条，不自动开回来（ADR 0020）
+      return {
+        ...state,
+        phase: "failed",
+        bar: null,
+        failureKind: "kicked",
+        panelStatus: { kind: "err", text: "已在别处开听，这里停了。要在这台继续，重新按开听。" },
+      };
+    case "full":
+      // 满员：新开被拒、已开的不受影响（ADR 0016）
+      return {
+        ...state,
+        phase: "failed",
+        bar: null,
+        failureKind: "full",
+        panelStatus: { kind: "err", text: "现在满了，稍后再试。已开的听译不受影响。" },
+      };
+    case "auth":
+      // 登录失效：别处改了密码或退出了。要重新登录，不当闪断、不自动再开
+      return {
+        ...state,
+        phase: "failed",
+        bar: null,
+        failureKind: "auth",
+        panelStatus: { kind: "err", text: "登录已失效，重新登录后再开托管听译。" },
+      };
   }
 }

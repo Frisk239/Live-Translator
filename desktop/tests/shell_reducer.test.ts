@@ -289,3 +289,39 @@ describe("音源清单比较", () => {
     expect(sameSources(list, next)).toBe(false);
   });
 });
+
+describe("托管终态提示：被顶 / 满员 / 登录失效", () => {
+  it("被顶：停听撤条，说明已在别处开听", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "draft", orig: "hello", trans: "你好" } });
+    s = reduce(s, { type: "listen", event: { type: "notice", kind: "kicked" } });
+    expect(s.phase).toBe("failed");
+    expect(s.bar).toBeNull();
+    expect(s.failureKind).toBe("kicked");
+    expect(s.panelStatus.text).toContain("已在别处开听");
+  });
+
+  it("满员：开听失败并说明现在满了", () => {
+    const s = reduce(freshState(), { type: "listen", event: { type: "notice", kind: "full" } });
+    expect(s.phase).toBe("failed");
+    expect(s.failureKind).toBe("full");
+    expect(s.panelStatus.text).toContain("现在满了");
+  });
+
+  it("登录失效：停听并要求重新登录，不当闪断", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "notice", kind: "auth" } });
+    expect(s.phase).toBe("failed");
+    expect(s.bar).toBeNull();
+    expect(s.failureKind).toBe("auth");
+    expect(s.panelStatus.text).toContain("重新登录");
+  });
+
+  it("三种终态都算面板要重绘的变化", () => {
+    for (const kind of ["kicked", "full", "auth"] as const) {
+      const s = startListening(freshState());
+      const next = reduce(s, { type: "listen", event: { type: "notice", kind } });
+      expect(panelViewChanged(s, next)).toBe(true);
+    }
+  });
+});

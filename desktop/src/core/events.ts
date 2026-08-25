@@ -12,7 +12,10 @@ export type NoticeKind =
   | "no_speech" // 没人声：画面不出东西，面板状态行说明
   | "not_lang" // 不是英 / 日 / 韩的人声：字幕位置出一条提示行
   | "no_audio" // 音源抓不到：停止开听，面板给改用系统混音 / 重试两个出路
-  | "crashed"; // 听译挂了：撤字幕窗，托盘通知，重试直接回在听
+  | "crashed" // 听译挂了：撤字幕窗，托盘通知，重试直接回在听
+  | "kicked" // 被顶：同一账号在别处开了托管听译，这边停听撤条，不自动开回来
+  | "full" // 满员：这台机器同时开的听译到上限，新开被拒、已开不动
+  | "auth"; // 登录失效：别处改了密码 / 退出了，要重新登录
 
 /** 壳 → 听译 */
 export type ShellCommand =
@@ -41,7 +44,10 @@ export function isListenEvent(data: unknown): data is ListenEvent {
       d.kind === "no_speech" ||
       d.kind === "not_lang" ||
       d.kind === "no_audio" ||
-      d.kind === "crashed"
+      d.kind === "crashed" ||
+      d.kind === "kicked" ||
+      d.kind === "full" ||
+      d.kind === "auth"
     );
   return false;
 }
