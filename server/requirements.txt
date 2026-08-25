@@ -1,4 +1,12 @@
 fastapi
 uvicorn[standard]
 httpx
+websockets
 pytest
+numpy
+sherpa-onnx
+onnxruntime
+tokenizers
+ctranslate2
+psutil
+asyncpg
