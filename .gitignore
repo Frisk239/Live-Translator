@@ -1,6 +1,4 @@
 reference/
-docs/
-chanpin/
 desktop/llm.local.json
 .build_mats/
 **/__pycache__/

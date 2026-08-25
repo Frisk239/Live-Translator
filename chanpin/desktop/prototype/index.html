@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>直播同传工具 · 可交互原型（扔掉用）</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<!--
+  扔掉的原型。整个视口 = 一台模拟电脑：
+  观众在里面的浏览器看别人的外语直播（带聊天栏）。
+  本产品只出现在三处：托盘图标、控制面板（Win11 飞出面板样式）、字幕窗。
+  顶部小胶囊和右侧导演台抽屉是原型工具，不属于产品。
+  变体切换：胶囊里的箭头或 ←/→ 键，地址栏 #a/#b/#c 刷新保持。
+-->
+<body>
+
+<!-- ============ 模拟电脑（整块视口） ============ -->
+<div class="os" id="os">
+
+  <div class="wallpaper">
+    <div class="wp-bloom"></div>
+    <div class="wp-bloom b2"></div>
+    <div class="wp-bloom b3"></div>
+  </div>
+
+  <div class="desk-icons" id="deskIcons">
+    <div class="desk-icon" tabindex="0"><span class="di di-pc"></span>此电脑</div>
+    <div class="desk-icon" tabindex="0"><span class="di di-bin"></span>回收站</div>
+    <div class="desk-icon" tabindex="0"><span class="di di-folder"></span>下载</div>
+    <div class="desk-icon" tabindex="0"><span class="di di-file"></span>说明书.pdf</div>
+  </div>
+
+  <!-- 观众自己开的浏览器，正在看别人的直播。可拖、最大化、最小化 -->
+  <div class="browser-win" id="browserWin">
+    <div class="bw-titlebar" id="bwTitlebar">
+      <span class="bw-title"><span class="bw-fav"></span>Kayin 的英语直播 - WatchLive</span>
+      <span class="bw-btns">
+        <button data-bw="min" title="最小化">–</button><button data-bw="max" title="最大化 / 还原">□</button><button data-bw="close" title="关掉浏览器">×</button>
+      </span>
+    </div>
+    <div class="bw-tabs">
+      <span class="bw-tab on"><span class="bw-fav sm"></span>Kayin 的英语直播<span class="bw-tab-x">×</span></span>
+      <span class="bw-tab"><span class="bw-fav sm other"></span>首页<span class="bw-tab-x">×</span></span>
+      <span class="bw-tab-plus">+</span>
+    </div>
+    <div class="bw-nav">
+      <span class="bw-nav-btn">‹</span><span class="bw-nav-btn dim">›</span><span class="bw-nav-btn">⟳</span>
+      <span class="bw-addr"><span class="bw-lock"></span>watch.live/kayin</span>
+      <span class="bw-nav-btn star">☆</span>
+    </div>
+    <div class="bw-content">
+      <div class="bw-video">
+        <img id="streamImg" src="https://picsum.photos/seed/streamsight/1280/800" alt="别人的直播画面（占位图）">
+        <div class="bw-fallback"></div>
+        <div class="player-bar">
+          <span class="live-badge">● LIVE</span>
+          <span class="pb-title-txt">Kayin 的英语直播 · 游戏</span>
+          <span class="pb-meta">1.2 万人在看</span>
+          <span class="pb-vol"></span>
+          <span class="pb-theater"></span>
+        </div>
+      </div>
+      <div class="bw-chat">
+        <div class="chat-cap">聊天</div>
+        <div class="chat-list" id="chatList"></div>
+        <div class="chat-input">发送消息</div>
+      </div>
+    </div>
+    <div class="bw-resize" id="bwResize" title="拖动改窗口大小"></div>
+  </div>
+
+  <!-- 本产品之一：字幕窗。正式版透明置顶无按钮字穿透；原型画了把手才能拖 -->
+  <div class="subtitle-win" id="subtitleWin">
+    <div class="sub-chip">本产品原型把手：拖动移位置，右下角改大小。正式版无框、字穿透、跟屏幕不跟窗口。</div>
+    <div class="sub-hint" id="subHint"></div>
+    <div class="sub-orig" id="subOrig"></div>
+    <div class="sub-trans" id="subTrans"></div>
+    <div class="sub-resize" id="subResize"></div>
+  </div>
+
+  <!-- 本产品之二：控制面板。从托盘点开；× 只藏不停 -->
+  <div class="panel hidden" id="panel">
+    <div class="panel-titlebar">
+      <span class="panel-name" id="panelName">直播同传工具</span>
+      <button class="panel-close" id="panelClose" title="藏起面板（开听不会停）">×</button>
+    </div>
+    <div class="panel-body" id="panelBody"></div>
+  </div>
+
+  <!-- 本产品之三：托盘的右键菜单与系统气泡 -->
+  <div class="tray-menu hidden" id="trayMenu"></div>
+  <div class="toast hidden" id="toast"></div>
+
+  <!-- 从托盘退出后：电脑还在，直播还在放，本产品整份关掉 -->
+  <div class="quit-card hidden" id="quitOverlay">
+    <div class="quit-title">已从托盘退出</div>
+    <div class="quit-sub">字幕窗撤掉、托盘图标消失、控制面板收起。上次的音源和设置都记着。</div>
+    <button class="btn btn-accent" id="relaunchBtn">重新打开（只进托盘）</button>
+  </div>
+
+  <!-- 开始菜单（布景）：点开始按钮弹出，点别处收起 -->
+  <div class="start-menu hidden" id="startMenu">
+    <div class="sm-search">搜索应用、设置和文档</div>
+    <div class="sm-cap">已固定</div>
+    <div class="sm-apps">
+      <button class="sm-app"><span class="smi smi-edge"></span>Edge</button>
+      <button class="sm-app"><span class="smi smi-folder"></span>文件资源管理器</button>
+      <button class="sm-app"><span class="smi smi-store"></span>Microsoft Store</button>
+      <button class="sm-app"><span class="smi smi-gear"></span>设置</button>
+    </div>
+    <div class="sm-foot">
+      <span class="sm-user"></span>
+      <button class="sm-power" title="电源">⏻</button>
+    </div>
+  </div>
+
+  <!-- 任务栏：中是开始和应用，右是托盘区。本产品图标混在托盘里 -->
+  <div class="taskbar">
+    <div class="tb-center">
+      <button class="tb-start" title="开始"><i class="pane p1"></i><i class="pane p2"></i><i class="pane p3"></i><i class="pane p4"></i></button>
+      <button class="tb-search" title="搜索"></button>
+      <button class="tb-app tb-browser" id="tbBrowser" title="浏览器（观众的）"></button>
+      <button class="tb-app tb-explorer" title="文件资源管理器"></button>
+    </div>
+    <div class="tb-right">
+      <span class="tb-chevron" title="显示隐藏的图标">^</span>
+      <span class="tb-systray">
+        <span class="glyph glyph-wifi"></span><span class="glyph glyph-vol"></span><span class="glyph glyph-batt"></span>
+      </span>
+      <button class="tb-tray-our" id="trayOur" title="直播同传工具 · 左键开控制面板，右键出菜单"><i class="bar3"></i><span class="dot"></span></button>
+      <span class="tb-clock"><span id="clockTime">--:--</span><span id="clockDate">-/-</span></span>
+      <span class="tb-showdesk" title="显示桌面"></span>
+    </div>
+  </div>
+
+</div>
+
+<!-- ============ 原型工具（不属于产品） ============ -->
+<div class="harness">
+  <span class="h-title">直播同传工具 · 原型</span>
+  <span class="h-sep"></span>
+  <button class="sw-arrow" id="swPrev" title="上一个面板变体（←）">‹</button>
+  <span class="sw-label" id="swLabel"></span>
+  <button class="sw-arrow" id="swNext" title="下一个面板变体（→）">›</button>
+  <span class="h-sep"></span>
+  <button class="h-btn" id="drawerToggle">导演台</button>
+</div>
+
+<aside class="drawer" id="drawer">
+  <button class="drawer-grip" id="drawerGrip" title="开 / 关导演台">‹</button>
+  <div class="drawer-inner">
+    <div class="director-cap">导演台（原型用，不属于产品）</div>
+    <div class="director-group-cap">正常说话</div>
+    <button class="dir-btn" data-scene="en">英语直播（默认脚本）</button>
+    <button class="dir-btn" data-scene="ja">日语直播（源语言自动认）</button>
+    <div class="director-group-cap">切条压力</div>
+    <button class="dir-btn" data-scene="rapid">连珠炮 · 演示硬切</button>
+    <button class="dir-btn" data-scene="pause">停两秒再说 · 演示静默撤条</button>
+    <div class="director-group-cap">失败态</div>
+    <button class="dir-btn" data-scene="silence">很久没人声</button>
+    <button class="dir-btn" data-scene="music">放的是音乐（不是英日韩）</button>
+    <button class="dir-btn" data-scene="perm">音源抓不到（权限不够）</button>
+    <button class="dir-btn" data-scene="crash">听译挂了</button>
+    <div class="director-group-cap">首次与机器</div>
+    <button class="dir-btn" data-scene="firstrun">重置为第一次打开（模型下载）</button>
+    <button class="dir-btn" data-scene="weak">弱机器提示 开/关</button>
+    <button class="dir-btn" data-scene="sourcegone">上次音源进程已退出 开/关</button>
+
+    <div class="readout-cap">当前状态（每次操作后刷新）</div>
+    <dl class="readout" id="readout"></dl>
+  </div>
+</aside>
+
+<script src="app.js"></script>
+</body>
+</html>

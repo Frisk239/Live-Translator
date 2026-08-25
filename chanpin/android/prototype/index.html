@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>直播同传 · 安卓可交互原型（扔掉用）</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<!--
+  扔掉的原型。整个视口 = 一台安卓手机：
+  观众在里面用「看播」（别人的直播 app，竖屏）看外语直播。
+  本产品只出现在三处：悬浮字幕窗（叠在直播上）、常驻通知、本产品自己的 app。
+  手机外的顶部胶囊和右侧导演台抽屉是原型工具，不属于产品。
+  状态栏点一下开 / 关通知抽屉；底部手势条点一下回桌面。
+-->
+<body>
+
+<!-- ============ 工作台 + 手机 ============ -->
+<div class="bench">
+  <div class="phone" id="phone">
+    <div class="screen" id="screen">
+
+      <!-- 状态栏：点一下开通知抽屉；在听时左侧亮投屏小标 -->
+      <div class="statusbar" id="statusbar" title="点一下开 / 关通知">
+        <span class="sb-left">
+          <span id="sbTime">9:41</span>
+          <span class="sb-cast hidden" id="sbCast" title="正在截取音频（系统给的）"></span>
+        </span>
+        <span class="sb-right">
+          <span class="glyph g-wifi"></span><span class="glyph g-vol"></span><span class="glyph g-batt"><i></i></span>
+        </span>
+      </div>
+
+      <!-- 舞台一：桌面（启动器）。直播 App 和本产品的图标能点，其余是布景 -->
+      <div class="stage stage-home" id="stHome">
+        <div class="home-wall"><div class="hw-bloom"></div></div>
+        <div class="home-clock">
+          <div class="hc-time" id="hcTime">9:41</div>
+          <div class="hc-date" id="hcDate">8月25日 周二</div>
+        </div>
+        <div class="home-search">搜索应用和内容</div>
+        <div class="home-apps">
+          <button class="happ" id="launchLive"><span class="hi hi-live"></span>看播</button>
+          <button class="happ" id="launchOurs"><span class="hi hi-ours"><i class="bar3"></i></span>直播同传</button>
+          <button class="happ fake" disabled><span class="hi hi-cam"></span>相机</button>
+          <button class="happ fake" disabled><span class="hi hi-set"></span>设置</button>
+        </div>
+        <div class="home-dock">
+          <button class="happ" id="dockLive"><span class="hi hi-live"></span></button>
+          <button class="happ" id="dockOurs"><span class="hi hi-ours"><i class="bar3"></i></span></button>
+          <button class="happ fake" disabled><span class="hi hi-cam"></span></button>
+          <button class="happ fake" disabled><span class="hi hi-set"></span></button>
+        </div>
+      </div>
+
+      <!-- 舞台二：别人的直播 app（竖屏全屏）。不归本产品 -->
+      <div class="stage stage-live hidden" id="stLive">
+        <div class="live-video"><div class="lv-grad"></div><div class="lv-grad2"></div></div>
+        <div class="live-top">
+          <span class="lt-tabs"><span class="on">推荐</span><span>关注</span></span>
+          <span class="lt-search"></span>
+        </div>
+        <div class="live-livebadge">● LIVE</div>
+        <div class="live-rail">
+          <span class="lr-ava"></span>
+          <span class="lr-ic lr-heart"><i></i><b>1.2万</b></span>
+          <span class="lr-ic lr-cmt"><i></i><b>3842</b></span>
+          <span class="lr-ic lr-share"><i></i><b>分享</b></span>
+          <span class="lr-disc"><i></i></span>
+        </div>
+        <div class="live-dm" id="liveDm"></div>
+        <div class="live-bottom">
+          <div class="lb-meta"><b>kayin_uk</b> · 晚上好，今天冲分（英语）</div>
+          <div class="lb-bar"><span class="lb-input">说点什么…</span><span class="lb-gift"></span></div>
+        </div>
+      </div>
+
+      <!-- 舞台三：本产品 app。登录 / 主界面 / 个人中心由 app.js 画进 oursBody -->
+      <div class="stage stage-ours hidden" id="stOurs">
+        <div class="ours-body" id="oursBody"></div>
+      </div>
+
+      <!-- 本产品之一：悬浮字幕窗。正式版叠在别的 app 上、可拖；原型画了把手 -->
+      <div class="subtitle-win hidden" id="subtitleWin">
+        <div class="sub-chip">本产品原型把手：拖着移位置。正式版叠在直播画面上，双指改大小。</div>
+        <div class="sub-hint" id="subHint"></div>
+        <div class="sub-orig" id="subOrig"></div>
+        <div class="sub-trans" id="subTrans"></div>
+      </div>
+
+      <!-- 本产品之二：横幅通知（顶号 / 满员 / 断网时从状态栏滑下来） -->
+      <div class="heads-up hidden" id="headsUp"></div>
+
+      <!-- 通知抽屉：状态栏点开。在听时最上面挂着常驻通知 -->
+      <div class="shade hidden" id="shade">
+        <div class="shade-head">
+          <span id="shadeDate">8月25日 周二</span>
+          <span class="sh-glyphs"><span class="glyph g-wifi"></span><span class="glyph g-vol"></span><span class="glyph g-batt"><i></i></span></span>
+        </div>
+        <div class="shade-list" id="shadeList"></div>
+        <div class="shade-foot">通知抽屉是布景。常驻通知里的「停止」归本产品。</div>
+      </div>
+
+      <!-- 系统对话框：媒体投影授权（开听必过的一道系统闸，文案安卓定的，原型只是示意） -->
+      <div class="sysdlg hidden" id="sysDlg">
+        <div class="sysdlg-card">
+          <div class="sd-icon"></div>
+          <div class="sd-title">允许「直播同传」开始录制吗？</div>
+          <div class="sd-body">「直播同传」将截取您屏幕上播放的声音。声音只用于这次听译，用完即丢，不落盘。</div>
+          <div class="sd-btns">
+            <button id="sysCancel">取消</button>
+            <button id="sysStart" class="sd-go">立即开始</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 手势条：点一下回桌面（布景，但回桌面影响字幕在哪一层） -->
+      <div class="gesture" id="gestureBar" title="点一下回桌面"></div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ============ 原型工具（不属于产品） ============ -->
+<div class="harness">
+  <span class="h-title">直播同传 · 安卓原型</span>
+  <span class="h-sep"></span>
+  <button class="h-btn" id="drawerToggle">导演台</button>
+</div>
+
+<aside class="drawer" id="drawer">
+  <button class="drawer-grip" id="drawerGrip" title="开 / 关导演台">‹</button>
+  <div class="drawer-inner">
+    <div class="director-cap">导演台（原型用，不属于产品）</div>
+
+    <div class="director-group-cap">舞台（手机里开着什么）</div>
+    <button class="dir-btn stage-btn" data-stage="home">桌面</button>
+    <button class="dir-btn stage-btn" data-stage="live">看播（别人的直播）</button>
+    <button class="dir-btn stage-btn" data-stage="ours">本产品 App</button>
+
+    <div class="director-group-cap">账号</div>
+    <button class="dir-btn" data-act="login-as">以已登录进入（demo@example.com）</button>
+    <button class="dir-btn" data-act="logout">登出（回登录页）</button>
+
+    <div class="director-group-cap">正常说话</div>
+    <button class="dir-btn" data-scene="en">英语直播（默认脚本）</button>
+    <button class="dir-btn" data-scene="ja">日语直播（源语言自动认）</button>
+
+    <div class="director-group-cap">切条压力</div>
+    <button class="dir-btn" data-scene="rapid">连珠炮 · 演示硬切</button>
+    <button class="dir-btn" data-scene="pause">停两秒再说 · 演示静默撤条</button>
+
+    <div class="director-group-cap">失败与事件</div>
+    <button class="dir-btn" data-ev="bump">顶号：别处开听，这台被顶</button>
+    <button class="dir-btn" data-ev="full">下次开听时满员 开/关</button>
+    <button class="dir-btn" data-ev="net">断网：停听并告知</button>
+    <button class="dir-btn" data-ev="capture">抓不到声音（该 App 不让抓）</button>
+    <button class="dir-btn" data-ev="blip">闪断：自动再开</button>
+
+    <div class="director-group-cap">听不出</div>
+    <button class="dir-btn" data-scene="silence">很久没人声</button>
+    <button class="dir-btn" data-scene="music">放的是音乐（不是英日韩）</button>
+
+    <div class="readout-cap">当前状态（每次操作后刷新）</div>
+    <dl class="readout" id="readout"></dl>
+  </div>
+</aside>
+
+<script src="app.js"></script>
+</body>
+</html>
