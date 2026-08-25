@@ -302,6 +302,8 @@ pub struct LlmThinkProbe {
     pub ok: bool,
     pub preview: String,
     pub options: Vec<LlmThinkOption>,
+    /// 自动挑好的最低思考档（参数名 + 值）；没挑出来就靠引擎的通用默认
+    pub recommended: Option<LlmThinkOption>,
 }
 
 fn thinking_param_names(params: &[String]) -> Vec<String> {
@@ -433,6 +435,29 @@ fn think_option(param: &str, value: &str) -> LlmThinkOption {
     }
 }
 
+/// 从探测结果里挑「思考最少」的一档：先找完全关闭的值，退而求其次最低档；
+/// 都没有就返回 None，交给引擎按最通用的参数试最低档（400 兜底去掉）。
+pub fn pick_lowest_think(options: &[LlmThinkOption]) -> Option<LlmThinkOption> {
+    const OFF: [&str; 8] = [
+        "none", "no", "no_think", "off", "minimal", "disable", "disabled", "false",
+    ];
+    const LOW: [&str; 2] = ["low", "lite"];
+    let mut low: Option<LlmThinkOption> = None;
+    for o in options {
+        if o.param.is_empty() {
+            continue; // 「不发送」那一项不算档位
+        }
+        let v = o.value.to_ascii_lowercase();
+        if OFF.contains(&v.as_str()) {
+            return Some(o.clone());
+        }
+        if LOW.contains(&v.as_str()) && low.is_none() {
+            low = Some(o.clone());
+        }
+    }
+    low
+}
+
 async fn chat_error_or_ok(
     client: &reqwest::Client,
     url: &str,
@@ -475,6 +500,7 @@ pub async fn probe_thinking(cfg: &LlmConfig) -> LlmThinkProbe {
             ok: false,
             preview: "先填接口地址、模型和密钥。".into(),
             options: vec![],
+            recommended: None,
         };
     }
     let base = cfg.base_url.trim_end_matches('/');
@@ -488,6 +514,7 @@ pub async fn probe_thinking(cfg: &LlmConfig) -> LlmThinkProbe {
                 ok: false,
                 preview: "建连失败。".into(),
                 options: vec![],
+                recommended: None,
             };
         }
     };
@@ -540,17 +567,20 @@ pub async fn probe_thinking(cfg: &LlmConfig) -> LlmThinkProbe {
         }
     }
     let discovered = options.len().saturating_sub(1);
+    let recommended = pick_lowest_think(&options);
     if discovered == 0 {
         LlmThinkProbe {
             ok: true,
-            preview: "接口没报思考档位，改写会不带思考字段。".into(),
+            preview: "接口没报思考档位，先按通用参数带最低档。".into(),
             options,
+            recommended: None,
         }
     } else {
         LlmThinkProbe {
             ok: true,
-            preview: format!("从接口发现 {discovered} 档思考。听译改写尽量选关闭/不思考。"),
+            preview: format!("从接口发现 {discovered} 档思考，已自动选最低。"),
             options,
+            recommended,
         }
     }
 }
@@ -558,6 +588,34 @@ pub async fn probe_thinking(cfg: &LlmConfig) -> LlmThinkProbe {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn think_opt(param: &str, value: &str) -> LlmThinkOption {
+        LlmThinkOption {
+            id: format!("{param}:{value}"),
+            label: String::new(),
+            param: param.into(),
+            value: value.into(),
+            ok: true,
+        }
+    }
+
+    #[test]
+    fn pick_lowest_think_prefers_off_then_low() {
+        let mixed = vec![
+            think_opt("", ""), // 「不发送」不算档位
+            think_opt("reasoning_effort", "high"),
+            think_opt("reasoning_effort", "low"),
+            think_opt("enable_thinking", "false"), // 布尔关 = 完全关闭，最优先
+        ];
+        let picked = pick_lowest_think(&mixed).unwrap();
+        assert_eq!((picked.param.as_str(), picked.value.as_str()), ("enable_thinking", "false"));
+
+        let low_only = vec![think_opt("", ""), think_opt("reasoning_effort", "medium"), think_opt("reasoning_effort", "low")];
+        assert_eq!(pick_lowest_think(&low_only).unwrap().value, "low");
+
+        assert!(pick_lowest_think(&[think_opt("", "")]).is_none());
+        assert!(pick_lowest_think(&[]).is_none());
+    }
 
     fn temp_models_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir()

@@ -5,6 +5,7 @@
 
 mod capture;
 mod cursor_watch;
+mod hosted;
 mod listen;
 mod llm;
 mod models;
@@ -59,6 +60,7 @@ struct AppState {
     capture: Mutex<Option<capture::CaptureHandle>>,
     /// 采音实际绑定的 pid（进程音源）；系统混音为 None
     capture_pid: std::sync::atomic::AtomicU32,
+    hosted: Mutex<Option<hosted::SavedSession>>,
 }
 
 fn current_phase(app: &AppHandle) -> Phase {
@@ -190,10 +192,35 @@ fn stop_capture(app: &AppHandle) {
 }
 
 async fn do_start(app: AppHandle, source: String) -> Result<(), String> {
-    {
+    let hosted = {
         let st = app.state::<AppState>();
-        if !st.settings.lock().unwrap().model_ready {
-            return Err("模型还没装好，装完自动能听".into());
+        let way = st.settings.lock().unwrap().listen_way.clone();
+        way == "hosted"
+    };
+    if hosted {
+        let session = app
+            .state::<AppState>()
+            .hosted
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "先登录再开托管听译".to_string())?;
+        let url = hosted::listen_ws_url()?;
+        {
+            let st = app.state::<AppState>();
+            let mut g = st.listen.lock().unwrap();
+            g.remote_url = Some(url);
+            g.auth_token = Some(session.token);
+        }
+    } else {
+        {
+            let st = app.state::<AppState>();
+            if !st.settings.lock().unwrap().model_ready {
+                return Err("模型还没装好，装完自动能听".into());
+            }
+            let mut g = st.listen.lock().unwrap();
+            g.remote_url = None;
+            g.auth_token = None;
         }
     }
     let (fake, script, translate) = {
@@ -201,7 +228,7 @@ async fn do_start(app: AppHandle, source: String) -> Result<(), String> {
         let ls = st.listen.lock().unwrap();
         (ls.fake, ls.script.clone(), "ct2")
     };
-    if fake {
+    if fake && !hosted {
         listen::send(
             &app,
             serde_json::json!({
@@ -260,6 +287,10 @@ struct BootInfo {
     weak: bool,
     phase: Phase,
     download_pct: f64,
+    hosted_origin: String,
+    hosted_account: Option<hosted::SavedSession>,
+    /// 登录是否记在这台电脑上（改密码换新 token 时要不要重写凭据）
+    hosted_remembered: bool,
 }
 
 #[tauri::command]
@@ -278,6 +309,7 @@ fn boot_info<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<BootInfo, String> 
         None => false,
     };
     let ls = st.listen.lock().unwrap();
+    let hosted_account = st.hosted.lock().unwrap().clone();
     Ok(BootInfo {
         settings,
         sources: list,
@@ -288,6 +320,9 @@ fn boot_info<R: tauri::Runtime>(app: &AppHandle<R>) -> Result<BootInfo, String> 
             Phase::Downloading => 1.0,
             _ => 0.0,
         },
+        hosted_origin: hosted::origin(),
+        hosted_account,
+        hosted_remembered: hosted::load_remembered().is_some(),
     })
 }
 
@@ -342,9 +377,10 @@ async fn select_source(app: AppHandle, source: String) -> Result<(), String> {
             serde_json::json!({ "type": "switch", "source": source }),
         )
         .await?;
+        // 时间不跨语言传：两端各自的 performance.now 才是提示计时的基准
         let _ = app.emit(
             "app://source_switched",
-            serde_json::json!({ "sourceLabel": sources::label(&source), "now": now_ms() }),
+            serde_json::json!({ "sourceLabel": sources::label(&source) }),
         );
     }
     Ok(())
@@ -428,6 +464,25 @@ fn set_weight(app: AppHandle, weight: String) {
 }
 
 #[tauri::command]
+fn save_hosted_session(app: AppHandle, email: String, token: String, remember: bool) -> Result<(), String> {
+    let session = hosted::SavedSession { email, token };
+    *app.state::<AppState>().hosted.lock().unwrap() = Some(session.clone());
+    if remember {
+        hosted::save_remembered(&session)?;
+    } else {
+        hosted::clear_remembered();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn clear_hosted_session(app: AppHandle) {
+    hosted::clear_remembered();
+    *app.state::<AppState>().hosted.lock().unwrap() = None;
+    let _ = app.emit("hosted://account", serde_json::Value::Null);
+}
+
+#[tauri::command]
 fn set_listen_way(app: AppHandle, way: String) {
     if current_phase(&app) == Phase::Listening {
         return;
@@ -438,6 +493,9 @@ fn set_listen_way(app: AppHandle, way: String) {
     };
     app.state::<AppState>().settings.lock().unwrap().listen_way = way.into();
     save_settings(&app);
+    if way != "hosted" {
+        kick_off_local_runtime(&app);
+    }
 }
 
 #[tauri::command]
@@ -489,13 +547,6 @@ async fn set_autostart(app: AppHandle, on: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn now_ms() -> f64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as f64)
-        .unwrap_or(0.0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -512,6 +563,99 @@ mod tests {
             Err(message) if message == "控制面板正在启动"
         ));
     }
+}
+
+/// 改回本机：模型齐了就起 sidecar，否则开始下载。
+fn kick_off_local_runtime(app: &AppHandle) {
+    let st = app.state::<AppState>();
+    if st.listen.lock().unwrap().port.is_some() {
+        return;
+    }
+    let fake = st.listen.lock().unwrap().fake;
+    let models_dir = st.models_dir.clone();
+    let resource_dir = st.resource_dir.clone();
+    let models_on_disk = fake || models::all_present(&models_dir);
+    if models_on_disk {
+        let (port, child) = listen::spawn_listen(
+            fake,
+            if fake { None } else { Some(&models_dir) },
+            resource_dir.as_deref(),
+        );
+        if let Some(port) = port {
+            st.listen.lock().unwrap().port = Some(port);
+            *st.child.lock().unwrap() = child;
+        } else if !fake {
+            notify(
+                app,
+                "直播同传工具",
+                "听译没起来。安装包请重装；开发形态请检查 Python。",
+            );
+        }
+        if !fake {
+            st.settings.lock().unwrap().model_ready = true;
+            save_settings(app);
+        }
+        return;
+    }
+    if current_phase(app) == Phase::Downloading {
+        return;
+    }
+    start_model_download(app.clone());
+}
+
+fn start_model_download(app: AppHandle) {
+    set_phase(&app, Phase::Downloading);
+    let fake = app.state::<AppState>().listen.lock().unwrap().fake;
+    let demo_tick = fake || std::env::var("FAKE_FIRSTRUN").is_ok();
+    tauri::async_runtime::spawn(async move {
+        if demo_tick {
+            let mut pct = 0.0f64;
+            loop {
+                tokio::time::sleep(Duration::from_millis(260)).await;
+                pct += 1.4 + rand::random::<f64>() * 1.4;
+                if pct >= 100.0 {
+                    break;
+                }
+                let _ = app.emit("app://download", pct);
+            }
+        } else {
+            let dir = app.state::<AppState>().models_dir.clone();
+            let ah = app.clone();
+            let res = models::download_all(&dir, move |pct| {
+                let _ = ah.emit("app://download", (pct * 100.0).min(99.9));
+            })
+            .await;
+            if let Err(e) = res {
+                set_phase(&app, Phase::Idle);
+                notify(
+                    &app,
+                    "直播同传工具",
+                    &format!("听译模型下载失败：{e}。下次打开会重试。"),
+                );
+                return;
+            }
+            let resource_dir = app.state::<AppState>().resource_dir.clone();
+            let (port, child) = listen::spawn_listen(false, Some(&dir), resource_dir.as_deref());
+            if let Some(port) = port {
+                app.state::<AppState>().listen.lock().unwrap().port = Some(port);
+                *app.state::<AppState>().child.lock().unwrap() = child;
+            } else {
+                notify(
+                    &app,
+                    "直播同传工具",
+                    "听译没起来。安装包请重装；开发形态请检查 Python。",
+                );
+            }
+        }
+        {
+            let st = app.state::<AppState>();
+            st.settings.lock().unwrap().model_ready = true;
+        }
+        save_settings(&app);
+        let _ = app.emit("app://download", 100.0f64);
+        notify(&app, "直播同传工具", "听译模型装好了，随时可以开听。");
+        set_phase(&app, Phase::Idle);
+    });
 }
 
 /// 开听中音源进程退出监测：进程没了就停止开听（撤字幕窗），
@@ -591,8 +735,12 @@ fn main() {
                 settings.model_ready = false;
             }
 
-            // 真听译的进程等模型就绪后再起；假听译立刻起
-            let (port, child) = if fake || models_ready_on_disk {
+            // 托管不占本机 sidecar；真听译等模型就绪后再起；假听译立刻起
+            let (port, child) = if listen::should_spawn_local(
+                &settings.listen_way,
+                fake,
+                models_ready_on_disk,
+            ) {
                 let (port, child) = listen::spawn_listen(
                     fake,
                     if fake { None } else { Some(&models_dir) },
@@ -600,7 +748,7 @@ fn main() {
                 );
                 (port, child)
             } else {
-                (None, None) // 下载完成后在下载任务里 spawn
+                (None, None) // 本机下载完成后 / 改回本机时再 spawn
             };
             let script = std::env::var("FAKE_SCRIPT").unwrap_or_else(|_| "en".into());
 
@@ -612,10 +760,15 @@ fn main() {
                     cmd_tx: listen::none_channel(),
                     script,
                     fake,
+                    remote_url: None,
+                    auth_token: None,
+                    conn_gen: 0,
+                    last_start: None,
                 }),
                 child: Mutex::new(child),
                 tray_toggle: Mutex::new(None),
                 tray_autostart: Mutex::new(None),
+                hosted: Mutex::new(hosted::load_remembered()),
                 models_dir,
                 resource_dir,
                 capture: Mutex::new(None),
@@ -754,67 +907,10 @@ fn main() {
             cursor_watch::spawn(app.handle().clone());
             spawn_source_watch(app.handle().clone());
 
-            // 第一次打开：面板先能用，下载进度占开听键位置。
-            // 假听译 / FAKE_FIRSTRUN 演示走假进度；真听译下载真模型（ModelScope/HF 镜像优先）。
-            let app_handle = app.handle().clone();
-            if !settings.model_ready {
-                set_phase(&app_handle, Phase::Downloading);
-                let demo_tick = fake || std::env::var("FAKE_FIRSTRUN").is_ok();
-                tauri::async_runtime::spawn(async move {
-                    if demo_tick {
-                        let mut pct = 0.0f64;
-                        loop {
-                            tokio::time::sleep(Duration::from_millis(260)).await;
-                            pct += 1.4 + rand::random::<f64>() * 1.4;
-                            if pct >= 100.0 {
-                                break;
-                            }
-                            let _ = app_handle.emit("app://download", pct);
-                        }
-                    } else {
-                        let dir = app_handle.state::<AppState>().models_dir.clone();
-                        let ah = app_handle.clone();
-                        let res = models::download_all(&dir, move |pct| {
-                            let _ = ah.emit("app://download", (pct * 100.0).min(99.9));
-                        })
-                        .await;
-                        if let Err(e) = res {
-                            set_phase(&app_handle, Phase::Idle);
-                            notify(
-                                &app_handle,
-                                "直播同传工具",
-                                &format!("听译模型下载失败：{e}。下次打开会重试。"),
-                            );
-                            return;
-                        }
-                        // 模型齐了，起真听译进程
-                        let resource_dir = app_handle.state::<AppState>().resource_dir.clone();
-                        let (port, child) =
-                            listen::spawn_listen(false, Some(&dir), resource_dir.as_deref());
-                        if let Some(port) = port {
-                            app_handle.state::<AppState>().listen.lock().unwrap().port = Some(port);
-                            *app_handle.state::<AppState>().child.lock().unwrap() = child;
-                        } else {
-                            notify(
-                                &app_handle,
-                                "直播同传工具",
-                                "听译没起来。安装包请重装；开发形态请检查 Python。",
-                            );
-                        }
-                    }
-                    {
-                        let st = app_handle.state::<AppState>();
-                        st.settings.lock().unwrap().model_ready = true;
-                    }
-                    save_settings(&app_handle);
-                    let _ = app_handle.emit("app://download", 100.0f64);
-                    notify(
-                        &app_handle,
-                        "直播同传工具",
-                        "听译模型装好了，随时可以开听。",
-                    );
-                    set_phase(&app_handle, Phase::Idle);
-                });
+            // 第一次打开本机：面板先能用，下载进度占开听键位置。
+            // 托管跳过（故事 19）；改回本机再下。假听译 / FAKE_FIRSTRUN 走假进度。
+            if listen::should_download_local(&settings.listen_way, settings.model_ready) {
+                start_model_download(app.handle().clone());
             }
 
             Ok(())
@@ -849,6 +945,8 @@ fn main() {
             set_plate,
             set_weight,
             set_listen_way,
+            save_hosted_session,
+            clear_hosted_session,
             set_autostart,
             get_llm_config,
             set_llm_config,

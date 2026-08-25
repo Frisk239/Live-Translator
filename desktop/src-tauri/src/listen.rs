@@ -35,6 +35,13 @@ pub struct ListenState {
     /// 假听译回放哪个脚本（FAKE_SCRIPT 环境变量；真听译忽略）
     pub script: String,
     pub fake: bool,
+    /// 托管听译 WSS；本机为 None
+    pub remote_url: Option<String>,
+    pub auth_token: Option<String>,
+    /// 连接代号：每建一条新缝自增。旧缝断掉后的残余事件不认新缝的状态（被顶误伤防线）
+    pub conn_gen: u64,
+    /// 这次开听用的 start 载荷；托管闪断时用它再开一路（ADR 0019）
+    pub last_start: Option<serde_json::Value>,
 }
 
 /// 构造 ListenState 用的空出站通道占位
@@ -129,6 +136,18 @@ pub fn resolve_engine(fake: bool, resource_dir: Option<&Path>) -> Option<(PathBu
     Some((PathBuf::from("python"), script))
 }
 
+/// 托管听译不占本机 Python 引擎、不拉本机模型。
+pub fn should_spawn_local(listen_way: &str, fake: bool, models_on_disk: bool) -> bool {
+    if listen_way == "hosted" {
+        return false;
+    }
+    fake || models_on_disk
+}
+
+pub fn should_download_local(listen_way: &str, model_ready: bool) -> bool {
+    listen_way != "hosted" && !model_ready
+}
+
 /// 起听译进程（假 = fake-listen/fake_listen.py，真 = engine/real_listen.py）。
 /// 返回它绑定的端口；READY 行没等到就放弃（开听时面板会显示失败原因）。
 pub fn spawn_listen(
@@ -200,31 +219,44 @@ pub fn spawn_listen(
     (None, Some(child))
 }
 
-fn connection_state<R: tauri::Runtime>(app: &tauri::AppHandle<R>) -> (Option<u16>, bool) {
+fn connection_state<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+) -> (Option<u16>, bool, Option<String>, Option<String>) {
     let state = app.state::<crate::AppState>();
     {
         let g = state.listen.lock().unwrap();
         let need = g.cmd_tx.as_ref().map_or(true, |tx| tx.is_closed());
-        (g.port, need)
+        (g.port, need, g.remote_url.clone(), g.auth_token.clone())
     }
 }
 
-/// 确保 WS 连着；断了就重连。
-pub async fn ensure_connected(app: &AppHandle) -> Result<(), String> {
-    let (port, need) = connection_state(app);
+/// 确保 WS 连着；断了就重连。返回是否刚建了新缝。
+pub async fn ensure_connected(app: &AppHandle) -> Result<bool, String> {
+    let (port, need, remote, auth) = connection_state(app);
     if !need {
-        return Ok(());
+        return Ok(false);
     }
-    let port = port.ok_or_else(|| "听译进程没起来".to_string())?;
+    let url = if let Some(remote) = remote.clone() {
+        remote
+    } else {
+        let port = port.ok_or_else(|| "听译进程没起来".to_string())?;
+        format!("ws://127.0.0.1:{port}")
+    };
     let ws = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
-        connect_async(format!("ws://127.0.0.1:{port}")),
+        std::time::Duration::from_secs(5),
+        connect_async(url.clone()),
     )
     .await
-    .map_err(|_| format!("连听译超时（127.0.0.1:{port}）"))?
+    .map_err(|_| format!("连听译超时（{url}）"))?
     .map_err(|e| format!("连不上听译：{e}"))?;
     let (ws, _) = ws;
     let (mut write, mut read) = ws.split();
+    let my_gen = {
+        let state = app.state::<crate::AppState>();
+        let mut g = state.listen.lock().unwrap();
+        g.conn_gen += 1;
+        g.conn_gen
+    };
     let (tx, mut rx) = mpsc::channel::<WsOut>(64);
     tauri::async_runtime::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -245,30 +277,116 @@ pub async fn ensure_connected(app: &AppHandle) -> Result<(), String> {
         let _ = write.close().await;
     });
     let app2 = app.clone();
+    let was_remote = remote.is_some();
     tauri::async_runtime::spawn(async move {
         while let Some(Ok(msg)) = read.next().await {
             if let Message::Text(txt) = msg {
-                route_event(&app2, &txt);
+                route_event(&app2, my_gen, &txt);
             }
         }
-        // 连接断了：还在听就当听译挂了处理
-        let phase = app2.state::<crate::AppState>().listen.lock().unwrap().phase;
-        if phase == Phase::Listening {
-            crate::set_phase(&app2, Phase::Failed);
-            crate::notify(&app2, "听译停了", "字幕先撤了。点托盘图标回控制面板重试。");
-        }
+        on_reader_end(&app2, my_gen, was_remote);
     });
     let state = app.state::<crate::AppState>();
-    state.listen.lock().unwrap().cmd_tx = Some(tx);
-    Ok(())
+    state.listen.lock().unwrap().cmd_tx = Some(tx.clone());
+    if let Some(token) = auth {
+        tx.send(WsOut::Text(
+            serde_json::json!({ "type": "auth", "token": token }).to_string(),
+        ))
+        .await
+        .map_err(|e| format!("没能把登录交给听译：{e}"))?;
+    }
+    Ok(true)
+}
+
+/// 缝断了：终态提示（被顶 / 满员 / 登录失效 / 崩了）已把 phase 打成 Failed，
+/// 这里只兜底其余情况；托管闪断则自动再开一路（ADR 0019 / 0020）。
+fn on_reader_end(app: &AppHandle, gen: u64, remote: bool) {
+    {
+        let st = app.state::<crate::AppState>();
+        let mut g = st.listen.lock().unwrap();
+        if g.conn_gen != gen {
+            return; // 新缝已接手，旧缝的收尾静默
+        }
+        g.cmd_tx = None; // 这条缝作废，下一次发送会重连
+    }
+    let phase = app.state::<crate::AppState>().listen.lock().unwrap().phase;
+    if phase != Phase::Listening {
+        return;
+    }
+    if !remote {
+        crate::set_phase(app, Phase::Failed);
+        crate::notify(app, "听译停了", "字幕先撤了。点托盘图标回控制面板重试。");
+        return;
+    }
+    // 独立任务里再开：不与 ensure_connected 的连接建立互相 await（Send 判定的环）
+    tauri::async_runtime::spawn(retry_reopen(app.clone(), gen));
+}
+
+/// 托管闪断 / 计划内重启：同登录同音源再开一路；重试用尽算真断网，
+/// 停并说明，不自动切本机（spec 故事 23 / 25 / 35）。
+async fn retry_reopen(app: AppHandle, gen: u64) {
+    const BACKOFF_MS: [u64; 5] = [600, 1200, 2400, 4800, 9600];
+    for wait in BACKOFF_MS {
+        tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+        let cmd = {
+            let st = app.state::<crate::AppState>();
+            let g = st.listen.lock().unwrap();
+            if g.phase != Phase::Listening || g.conn_gen != gen {
+                return; // 观众按了停，或新缝已接手
+            }
+            g.last_start.clone()
+        };
+        let Some(cmd) = cmd else { break };
+        if send(&app, cmd).await.is_ok() {
+            return; // 再开成功：新缝自己的读循环接手
+        }
+    }
+    let still = {
+        let st = app.state::<crate::AppState>();
+        let g = st.listen.lock().unwrap();
+        g.phase == Phase::Listening && g.conn_gen == gen
+    };
+    if still {
+        crate::set_phase(&app, Phase::Failed);
+        crate::notify(&app, "托管听译停了", "重试没能连上。等网络恢复后重新开听，或改用本机。");
+    }
 }
 
 pub async fn send(app: &AppHandle, cmd: serde_json::Value) -> Result<(), String> {
-    ensure_connected(app).await?;
+    let reconnected = ensure_connected(app).await?;
+    // 记下「这次开的什么」，闪断再开要用；switch 只换音源
+    if cmd["type"] == "start" || cmd["type"] == "switch" {
+        let state = app.state::<crate::AppState>();
+        let mut g = state.listen.lock().unwrap();
+        if cmd["type"] == "start" {
+            g.last_start = Some(cmd.clone());
+        } else {
+            let payload = match g.last_start.as_mut() {
+                Some(prev) => {
+                    prev["source"] = cmd["source"].clone();
+                    prev.clone()
+                }
+                None => serde_json::json!({ "type": "start", "source": cmd["source"], "translate": "ct2" }),
+            };
+            g.last_start = Some(payload);
+        }
+    }
     let state = app.state::<crate::AppState>();
     let tx = state.listen.lock().unwrap().cmd_tx.clone();
     let tx = tx.ok_or_else(|| "听译连接还没建立".to_string())?;
-    tx.send(WsOut::Text(cmd.to_string()))
+    // 重连窗口里换音源：新缝还没 start 过，switch 要升级成 start
+    let out = if cmd["type"] == "switch" && reconnected {
+        state
+            .listen
+            .lock()
+            .unwrap()
+            .last_start
+            .clone()
+            .unwrap_or_else(|| cmd.clone())
+    } else {
+        cmd
+    };
+    tx.send(WsOut::Text(out.to_string()))
         .await
         .map_err(|e| e.to_string())
 }
@@ -289,18 +407,65 @@ pub fn push_pcm(app: &AppHandle, chunk: Vec<f32>) {
     }
 }
 
-fn route_event(app: &AppHandle, raw: &str) {
+/// 终态提示：收到即停开听、撤字幕窗；其余（no_speech / not_lang）只转发给面板。
+pub fn is_terminal_notice(kind: &str) -> bool {
+    matches!(kind, "no_audio" | "crashed" | "kicked" | "full" | "auth")
+}
+
+fn route_event(app: &AppHandle, gen: u64, raw: &str) {
     let Ok(v) = serde_json::from_str::<serde_json::Value>(raw) else {
         return;
     };
-    // 音源抓不到 / 听译挂了：壳要停开听、撤字幕窗；no_speech / not_lang 只转发
-    if v["type"] == "notice" && (v["kind"] == "no_audio" || v["kind"] == "crashed") {
-        crate::set_phase(app, Phase::Failed);
-        if v["kind"] == "crashed" {
-            crate::notify(app, "听译停了", "字幕先撤了。点托盘图标回控制面板重试。");
+    {
+        let st = app.state::<crate::AppState>();
+        if st.listen.lock().unwrap().conn_gen != gen {
+            return; // 旧缝的残余事件：新缝已接手，不进面板也不改状态
+        }
+    }
+    if v["type"] == "notice" {
+        match v["kind"].as_str().unwrap_or("") {
+            "no_audio" => {
+                crate::set_phase(app, Phase::Failed);
+            }
+            "crashed" => {
+                crate::set_phase(app, Phase::Failed);
+                crate::notify(app, "听译停了", "字幕先撤了。点托盘图标回控制面板重试。");
+            }
+            // 被顶：后开的挤掉先开的，这边停听撤条，不自动开回来（ADR 0020）
+            "kicked" => {
+                crate::set_phase(app, Phase::Failed);
+                crate::notify(
+                    app,
+                    "已在别处开听",
+                    "同一账号在别处开了托管听译，这边停了。要在这台继续，回面板重新开听。",
+                );
+            }
+            // 满员：新开被拒，已开的不受影响（ADR 0016）
+            "full" => {
+                crate::set_phase(app, Phase::Failed);
+                crate::notify(
+                    app,
+                    "现在满了",
+                    "这台机器同时开的听译已到上限，已开的不受影响。稍后再试。",
+                );
+            }
+            // 登录失效（别处改了密码 / 退出）：清掉这台的登录，面板回登录页
+            "auth" => {
+                crate::set_phase(app, Phase::Failed);
+                drop_saved_hosted(app);
+                crate::notify(app, "登录已失效", "重新登录后才能再开托管听译。");
+            }
+            _ => {}
         }
     }
     let _ = app.emit("listen://event", v);
+}
+
+fn drop_saved_hosted(app: &AppHandle) {
+    let st = app.state::<crate::AppState>();
+    crate::hosted::clear_remembered();
+    *st.hosted.lock().unwrap() = None;
+    let _ = app.emit("hosted://account", serde_json::Value::Null);
 }
 
 #[cfg(test)]
@@ -316,6 +481,10 @@ mod tests {
                 cmd_tx: None,
                 script: "en".into(),
                 fake: false,
+                remote_url: None,
+                auth_token: None,
+                conn_gen: 0,
+                last_start: None,
             }),
             child: Mutex::new(None),
             tray_toggle: Mutex::new(None),
@@ -324,7 +493,30 @@ mod tests {
             resource_dir: None,
             capture: Mutex::new(None),
             capture_pid: std::sync::atomic::AtomicU32::new(0),
+            hosted: Mutex::new(None),
         }
+    }
+
+    #[test]
+    fn terminal_notices_stop_listening() {
+        for kind in ["no_audio", "crashed", "kicked", "full", "auth"] {
+            assert!(is_terminal_notice(kind), "{kind} 应为终态");
+        }
+        for kind in ["no_speech", "not_lang", "unknown"] {
+            assert!(!is_terminal_notice(kind), "{kind} 不是终态");
+        }
+    }
+
+    #[test]
+    fn hosted_skips_local_spawn_and_download() {
+        assert!(!should_spawn_local("hosted", false, true));
+        assert!(!should_spawn_local("hosted", true, true));
+        assert!(!should_download_local("hosted", false));
+        assert!(should_spawn_local("local", false, true));
+        assert!(!should_spawn_local("local", false, false));
+        assert!(should_spawn_local("local", true, false));
+        assert!(should_download_local("local", false));
+        assert!(!should_download_local("local", true));
     }
 
     #[test]
@@ -349,6 +541,6 @@ mod tests {
             .build(tauri::test::mock_context(tauri::test::noop_assets()))
             .unwrap();
 
-        assert_eq!(connection_state(app.handle()), (None, true));
+        assert_eq!(connection_state(app.handle()), (None, true, None, None));
     }
 }

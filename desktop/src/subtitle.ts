@@ -138,8 +138,9 @@ async function main() {
     render();
   });
   await listen("app://source_switched", (e) => {
-    const p = e.payload as { sourceLabel: string; now: number };
-    shell = reduce(shell, { type: "source_switched", sourceLabel: p.sourceLabel, now: p.now });
+    const p = e.payload as { sourceLabel: string };
+    // 提示计时与 tick 同基准（performance.now）；Rust 侧不传时间，纪元毫秒会把 hintUntil 推到永远到不了
+    shell = reduce(shell, { type: "source_switched", sourceLabel: p.sourceLabel, now: performance.now() });
     render();
   });
   await listen("settings://changed", (e) => {
