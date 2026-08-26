@@ -4,6 +4,10 @@
 则走 Postgres——以后加机器时两台认同一批账号与在听，满员仍是各自的路数闸。
 两种后端同一份 schema、同一组行为；SQL 写成 ? 占位，Postgres 侧统一改写成 $n。
 在听会话行只在开听期间存在，进程起来时先清干净（ADR 0019 清脏在听）。
+
+改表走编号迁移（_MIGRATIONS）：setup() 建 schema_migrations 记录表，按版本
+升序补齐未应用的迁移。老库（建过表、没有记录）靠迁移 1 的 IF NOT EXISTS
+幂等重放补上版本号，不需要手工对账。
 """
 
 from __future__ import annotations
@@ -16,26 +20,30 @@ import time
 from pathlib import Path
 from typing import Any
 
-_DDL = {
-    "sqlite": """
-CREATE TABLE IF NOT EXISTS accounts(
-  email TEXT PRIMARY KEY, salt BLOB NOT NULL, digest BLOB NOT NULL, created_ms INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS tokens(
-  token TEXT PRIMARY KEY, email TEXT NOT NULL, created_ms INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS tokens_email ON tokens(email);
-CREATE TABLE IF NOT EXISTS listen_sessions(
-  email TEXT PRIMARY KEY, started_ms INTEGER NOT NULL, peer TEXT NOT NULL DEFAULT '');
-""",
-    "postgres": """
-CREATE TABLE IF NOT EXISTS accounts(
-  email TEXT PRIMARY KEY, salt BYTEA NOT NULL, digest BYTEA NOT NULL, created_ms BIGINT NOT NULL);
-CREATE TABLE IF NOT EXISTS tokens(
-  token TEXT PRIMARY KEY, email TEXT NOT NULL, created_ms BIGINT NOT NULL);
-CREATE INDEX IF NOT EXISTS tokens_email ON tokens(email);
-CREATE TABLE IF NOT EXISTS listen_sessions(
-  email TEXT PRIMARY KEY, started_ms BIGINT NOT NULL, peer TEXT NOT NULL DEFAULT '');
-""",
-}
+_V1_SQLITE = [
+    """CREATE TABLE IF NOT EXISTS accounts(
+  email TEXT PRIMARY KEY, salt BLOB NOT NULL, digest BLOB NOT NULL, created_ms INTEGER NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS tokens(
+  token TEXT PRIMARY KEY, email TEXT NOT NULL, created_ms INTEGER NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS tokens_email ON tokens(email)",
+    """CREATE TABLE IF NOT EXISTS listen_sessions(
+  email TEXT PRIMARY KEY, started_ms INTEGER NOT NULL, peer TEXT NOT NULL DEFAULT '')""",
+]
+
+_V1_POSTGRES = [
+    """CREATE TABLE IF NOT EXISTS accounts(
+  email TEXT PRIMARY KEY, salt BYTEA NOT NULL, digest BYTEA NOT NULL, created_ms BIGINT NOT NULL)""",
+    """CREATE TABLE IF NOT EXISTS tokens(
+  token TEXT PRIMARY KEY, email TEXT NOT NULL, created_ms BIGINT NOT NULL)""",
+    "CREATE INDEX IF NOT EXISTS tokens_email ON tokens(email)",
+    """CREATE TABLE IF NOT EXISTS listen_sessions(
+  email TEXT PRIMARY KEY, started_ms BIGINT NOT NULL, peer TEXT NOT NULL DEFAULT '')""",
+]
+
+# (版本, {后端: [语句...]})；只追加新版本，不改写已发布的迁移
+_MIGRATIONS: list[tuple[int, dict[str, list[str]]]] = [
+    (1, {"sqlite": _V1_SQLITE, "postgres": _V1_POSTGRES}),
+]
 
 
 def now_ms() -> int:
@@ -96,7 +104,22 @@ class SqliteStore(Store):
         def init() -> None:
             with self._lock:
                 conn = self._db()
-                conn.executescript(_DDL["sqlite"])
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS schema_migrations(
+  version INTEGER PRIMARY KEY, applied_ms INTEGER NOT NULL)"""
+                )
+                applied = {
+                    row[0] for row in conn.execute("SELECT version FROM schema_migrations")
+                }
+                for version, stmts in _MIGRATIONS:
+                    if version in applied:
+                        continue
+                    for stmt in stmts["sqlite"]:
+                        conn.execute(stmt)
+                    conn.execute(
+                        "INSERT INTO schema_migrations(version, applied_ms) VALUES(?,?)",
+                        (version, now_ms()),
+                    )
                 # 起来清脏在听：上个进程留下的行一概不算数
                 conn.execute("DELETE FROM listen_sessions")
                 conn.commit()
@@ -214,7 +237,23 @@ class PostgresStore(Store):
     async def setup(self) -> None:
         pool = await self._pg()
         async with pool.acquire() as conn:
-            await conn.execute(_DDL["postgres"])
+            await conn.execute(
+                """CREATE TABLE IF NOT EXISTS schema_migrations(
+  version INTEGER PRIMARY KEY, applied_ms BIGINT NOT NULL)"""
+            )
+            rows = await conn.fetch("SELECT version FROM schema_migrations")
+            applied = {r["version"] for r in rows}
+            for version, stmts in _MIGRATIONS:
+                if version in applied:
+                    continue
+                async with conn.transaction():
+                    for stmt in stmts["postgres"]:
+                        await conn.execute(stmt)
+                    await conn.execute(
+                        "INSERT INTO schema_migrations(version, applied_ms) VALUES($1, $2)",
+                        version,
+                        now_ms(),
+                    )
             await conn.execute("DELETE FROM listen_sessions")
         self.ready = True
 

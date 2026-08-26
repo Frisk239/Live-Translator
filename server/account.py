@@ -81,6 +81,28 @@ def _default_max_routes() -> int:
     return max(1, min(8, (os.cpu_count() or 4) // 4))
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_origins(name: str) -> list[str] | None:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return None
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
+def client_source(request: Request, trust_proxy: bool) -> str:
+    """限流与在听记录用的来源地址。直连时就是对端 IP；反代后面只有配了
+    TRUST_PROXY 才认 X-Forwarded-For，且只信最右一跳——那是本机反代亲眼
+    看到的客户端地址，攻击者自带的假 XFF 会被反代追加在左边（ADR 0030 后续）。"""
+    if trust_proxy:
+        xff = request.headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "?"
+
+
 def _default_infer_workers() -> int:
     # 有界推理池（ADR 0021）：同时跑的路数个位数，其余排队
     return max(1, min(8, (os.cpu_count() or 4) // 2))
@@ -249,6 +271,8 @@ def create_app(
     login_max_fails: int | None = None,
     login_window_s: float | None = None,
     login_cooldown_s: float | None = None,
+    trust_proxy: bool | None = None,
+    cors_origins: list[str] | None = None,
 ) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -262,11 +286,19 @@ def create_app(
             pass
 
     app = FastAPI(lifespan=lifespan)
+    origins = cors_origins if cors_origins is not None else (
+        _env_origins("LIVE_TRANSLATOR_CORS_ORIGINS") or ["*"]
+    )
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],  # 开发期全开；生产 TLS 与收敛在反向代理（ADR 0025）
+        # 未配置保持全开（开发 / 测试零配置）；生产在 LIVE_TRANSLATOR_CORS_ORIGINS
+        # 收敛成壳的 origin（Windows 上是 http://tauri.localhost），收敛动作见 DEPLOY.md
+        allow_origins=origins,
         allow_methods=["*"],
         allow_headers=["*"],
+    )
+    app.state.trust_proxy = (
+        trust_proxy if trust_proxy is not None else _env_flag("LIVE_TRANSLATOR_TRUST_PROXY")
     )
     app.state.store = store or default_store()
     app.state.store_lock = asyncio.Lock()
@@ -345,7 +377,7 @@ def create_app(
     @app.post("/account/login")
     async def login(body: AccountIn, request: Request):
         email = _normalize_email(body.email)
-        key = request.client.host if request.client else "?"
+        key = client_source(request, app.state.trust_proxy)
         throttle = app.state.login_throttle
         if throttle.wait_left(key) > 0:
             return JSONResponse({"error": "试得太勤了，过几分钟再来。"}, status_code=429)
@@ -429,6 +461,10 @@ def create_app(
                 await _send_notice(ws, "full")
                 return
             peer = ws.client.host if ws.client else ""
+            if app.state.trust_proxy:
+                xff = ws.headers.get("x-forwarded-for", "")
+                if xff:
+                    peer = xff.split(",")[-1].strip()
             route = await st.routes.admit(email, token, send_json)
             if route is None:
                 await _send_notice(ws, "full")

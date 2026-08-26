@@ -231,3 +231,87 @@ def test_drain_rejects_new_listens():
     with c.websocket_connect("/listen") as ws:
         ws.send_json({"type": "auth", "token": t})
         assert ws.receive_json() == {"type": "notice", "kind": "full"}
+
+
+# ---------- 反代真实 IP：信任代理时限流按 XFF 最右一跳（ADR 0030 后续） ----------
+
+
+def test_login_throttle_uses_xff_rightmost_when_trusting_proxy():
+    c = client(
+        login_max_fails=2,
+        login_window_s=60,
+        login_cooldown_s=60,
+        trust_proxy=True,
+    )
+    register(c)
+    bad = {"email": "a@b.c", "password": "bad"}
+    # 同一个真实客户端（XFF 最右 1.2.3.4）：两次失败后被暂拒
+    for _ in range(2):
+        assert (
+            c.post("/account/login", json=bad, headers={"X-Forwarded-For": "9.9.9.9, 1.2.3.4"}).status_code
+            == 401
+        )
+    refused = c.post(
+        "/account/login",
+        json={"email": "a@b.c", "password": "secret12"},
+        headers={"X-Forwarded-For": "9.9.9.9, 1.2.3.4"},
+    )
+    assert refused.status_code == 429
+    # 另一个客户端不受前一个的连累
+    other = c.post(
+        "/account/login",
+        json={"email": "a@b.c", "password": "secret12"},
+        headers={"X-Forwarded-For": "9.9.9.9, 5.6.7.8"},
+    )
+    assert other.status_code == 200
+
+
+def test_login_throttle_ignores_xff_without_trust():
+    c = client(login_max_fails=2, login_window_s=60, login_cooldown_s=60)
+    register(c)
+    bad = {"email": "a@b.c", "password": "bad"}
+    # 不信任代理时 XFF 换着花样来也不拆分来源：仍按直连对端一起计
+    for i in range(2):
+        assert (
+            c.post("/account/login", json=bad, headers={"X-Forwarded-For": f"1.2.3.{i}"}).status_code
+            == 401
+        )
+    refused = c.post(
+        "/account/login", json=bad, headers={"X-Forwarded-For": "1.2.3.99"}
+    )
+    assert refused.status_code == 429
+
+
+# ---------- CORS：默认全开，配了白名单只认白名单 ----------
+
+
+def test_cors_default_open_for_dev():
+    c = client()
+    res = c.options(
+        "/account/login",
+        headers={
+            "Origin": "https://anything.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert res.headers.get("access-control-allow-origin") == "*"
+
+
+def test_cors_whitelist_restricts_origin():
+    c = client(cors_origins=["http://tauri.localhost"])
+    allowed = c.options(
+        "/account/login",
+        headers={
+            "Origin": "http://tauri.localhost",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert allowed.headers.get("access-control-allow-origin") == "http://tauri.localhost"
+    blocked = c.options(
+        "/account/login",
+        headers={
+            "Origin": "https://evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert blocked.headers.get("access-control-allow-origin") is None
