@@ -1439,6 +1439,11 @@ class Engine:
             self._bar_revise_launched = None
             return self._bar_seq
 
+    def current_bar_seq(self) -> int:
+        """缝事件附带的字幕条号：同一条草稿/定稿同号，切条递增。
+        供探针与 A/B 脚本按条统计，壳不依赖它判条。"""
+        return int(getattr(self, "_bar_seq", 0))
+
     def _next_llm_epoch(self) -> int:
         lock = getattr(self, "_bar_lock", None)
         if lock is None:

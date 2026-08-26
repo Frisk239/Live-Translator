@@ -339,14 +339,22 @@ def numbers_in(text: str, normalizer=None) -> set[str]:
 
 
 def coalesce_revised_finals(events: list[dict]) -> list[dict]:
-    """同原文连续定稿视为一条改写：时刻取首条（门禁用），译文取末条（质量用）。"""
+    """同一条字幕的连续定稿视为一次改写：时刻取首条（门禁用），译文取末条（质量用）。
+    有 seq（引擎条号）按 seq 合并；没有时回落同原文连续——复读的相邻两条会被合掉，
+    与壳「同原文判同条」口径一致。"""
+
+    def same_bar(prev: dict, event: dict) -> bool:
+        if prev.get("seq") is not None and event.get("seq") is not None:
+            return prev["seq"] == event["seq"]
+        return prev.get("orig") == event.get("orig")
+
     out: list[dict] = []
     for event in events:
         if (
             event.get("type") == "final"
             and out
             and out[-1].get("type") == "final"
-            and out[-1].get("orig") == event.get("orig")
+            and same_bar(out[-1], event)
         ):
             merged = dict(event)
             merged["at_ms"] = out[-1].get("at_ms")

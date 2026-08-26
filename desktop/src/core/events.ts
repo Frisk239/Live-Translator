@@ -30,8 +30,9 @@ export type ShellCommand =
 
 /** 听译 → 壳 */
 export type ListenEvent =
-  | { type: "draft"; orig: string; trans: string }
-  | { type: "final"; orig: string; trans: string }
+  /** seq = 字幕条号：同一条草稿/定稿同号、切条递增；真引擎带，假引擎/旧事件可没有，判条别依赖它 */
+  | { type: "draft"; orig: string; trans: string; seq?: number }
+  | { type: "final"; orig: string; trans: string; seq?: number }
   | { type: "notice"; kind: NoticeKind };
 
 export function isListenEvent(data: unknown): data is ListenEvent {

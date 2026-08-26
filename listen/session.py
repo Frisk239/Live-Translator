@@ -212,11 +212,16 @@ class ListenSession:
         finally:
             await self.close()
 
-    async def _send_event(self, kind: str, orig: str, trans: str, gen: int) -> None:
+    async def _send_event(
+        self, kind: str, orig: str, trans: str, gen: int, seq: int | None = None
+    ) -> None:
         if not self.live["started"] or self.live["gen"] != gen:
             return
         _debug_log(kind, orig, trans)
-        await self.send_json({"type": kind, "orig": orig, "trans": trans})
+        event: dict[str, Any] = {"type": kind, "orig": orig, "trans": trans}
+        if seq is not None:
+            event["seq"] = seq
+        await self.send_json(event)
 
     def _threadsafe_cb(self, kind: str, gen: int):
         loop = asyncio.get_running_loop()
@@ -224,7 +229,14 @@ class ListenSession:
         def wrapper(orig, trans):
             if not self.live["started"] or self.live["gen"] != gen:
                 return
-            asyncio.run_coroutine_threadsafe(self._send_event(kind, orig, trans, gen), loop)
+            # 事件发出时读条号：草稿/定稿在重活线程同步发，二次定稿（LLM 后到）
+            # 也已先校验条还活着，读到的都是这条的号
+            eng = self.holder.peek()
+            seq_fn = getattr(eng, "current_bar_seq", None)
+            seq = seq_fn() if callable(seq_fn) else None
+            asyncio.run_coroutine_threadsafe(
+                self._send_event(kind, orig, trans, gen, seq), loop
+            )
 
         return wrapper
 
