@@ -129,7 +129,10 @@ fun PanelScreen(
 
             sources.forEach { src ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = picked == src.label, onClick = { picked = src.label })
+                    RadioButton(selected = picked == src.label, onClick = {
+                        picked = src.label
+                        prefsStore.save(prefsStore.load().copy(lastSourceLabel = src.label))
+                    })
                     Text(src.label, style = MaterialTheme.typography.bodyMedium)
                 }
             }

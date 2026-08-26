@@ -47,7 +47,6 @@ class CaptionOverlay(
     }
 
     private val ticking = AtomicBoolean(false)
-    private var lastBarSeq: Long = -1
 
     init {
         orientation = VERTICAL

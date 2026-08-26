@@ -46,12 +46,17 @@ class ListenService : Service() {
     private var prefs: Prefs = Prefs()
     private var screenOffReceiver: BroadcastReceiver? = null
 
+    /** 主动停听时置位：projection.stop() 会回调自己的 onStop，别再当「锁屏/撤销」处理 */
+    @Volatile
+    private var stoppedByUs = false
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopListening(NoticeKind.NO_SPEECH, notify = false)
+                ListenBus.reset()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -62,6 +67,7 @@ class ListenService : Service() {
     }
 
     private fun begin(intent: Intent) {
+        stoppedByUs = false
         val code = intent.getIntExtra(EXTRA_CODE, 0)
         @Suppress("DEPRECATION")
         val data: Intent? = intent.getParcelableExtra(EXTRA_DATA)
@@ -94,7 +100,12 @@ class ListenService : Service() {
         projection = proj
         proj.registerCallback(object : MediaProjection.Callback() {
             override fun onStop() {
-                // Android 15 锁屏/系统撤销都会走这里（ADR 0038：锁屏即停听）
+                // Android 15 锁屏/系统撤销都会走这里（ADR 0038：锁屏即停听）；
+                // 自己 stopProjection 触发的回调不算，别覆盖「没在听」
+                if (stoppedByUs) {
+                    stopSelf()
+                    return
+                }
                 stopListening(NoticeKind.NO_SPEECH, notify = false)
                 ListenBus.update { it.copy(phase = ListenPhase.IDLE, statusText = "锁屏或撤销授权，已停听。要看字幕重新按开听。") }
                 stopSelf()
@@ -165,7 +176,8 @@ class ListenService : Service() {
             if (ev !is ListenEvent.Notice) {
                 val next = CaptionReducer.onEvent(CaptionState(ListenBus.state.value.bar), ev, System.currentTimeMillis())
                 ListenBus.update { it.copy(bar = next.bar) }
-                overlay?.render()
+                // 缝回调在 OkHttp 读线程；View 只能主线程动
+                overlay?.post { overlay?.render() }
             }
         }
 
@@ -251,6 +263,7 @@ class ListenService : Service() {
     }
 
     private fun stopListening(kind: NoticeKind?, notify: Boolean) {
+        stoppedByUs = true
         thread?.interrupt()
         thread = null
         record?.let {

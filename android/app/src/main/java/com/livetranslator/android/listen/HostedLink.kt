@@ -10,6 +10,7 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import org.json.JSONObject
+import java.util.logging.Logger
 import java.util.concurrent.atomic.AtomicBoolean
 
 /** 托管听译缝的客户端：auth → start → 持续推 f32le PCM → 收 draft/final/notice。
@@ -51,9 +52,17 @@ class HostedLink(
     }
 
     /** PCM16 → f32le 推流；未连接成功时直接丢弃（静音期丢帧无害，连接后从头推当前流）。 */
+    private var sentBytes = 0L
+    private var lastLogMs = 0L
     fun sendPcm(buf: ShortArray, n: Int) {
         if (!feeding.get()) return
-        ws?.send(Seam.pcm16ToF32le(buf, n).toByteString())
+        val ok = ws?.send(Seam.pcm16ToF32le(buf, n).toByteString()) ?: false
+        sentBytes += n * 4
+        val now = System.currentTimeMillis()
+        if (now - lastLogMs >= 5000) {
+            lastLogMs = now
+            Log.info("sent total=${sentBytes} bytes ok=$ok")
+        }
     }
 
     private fun open() {
@@ -65,6 +74,7 @@ class HostedLink(
         }
         ws = client.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                Log.info("ws open, sending auth+start")
                 webSocket.send(Seam.authCommand(token))
                 webSocket.send(Seam.startCommand(source))
                 feeding.set(true)
@@ -73,6 +83,7 @@ class HostedLink(
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                Log.info("ws msg: ${text.take(120)}")
                 val obj = try {
                     JSONObject(text)
                 } catch (_: Exception) {
@@ -91,6 +102,7 @@ class HostedLink(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                Log.info("ws failure: ${t.message}")
                 feeding.set(false)
                 if (closedByUs) return
                 retryOrFail()
@@ -98,6 +110,7 @@ class HostedLink(
 
             override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
                 // 服务端主动关闭走这里（OkHttp 不自动回应），回个 close 再按断线处理
+                Log.info("ws closing code=$code reason=$reason")
                 feeding.set(false)
                 webSocket.close(1000, null)
                 if (!closedByUs) retryOrFail()
@@ -131,4 +144,10 @@ class HostedLink(
         const val MAX_RETRIES = 5
         const val RETRY_BASE_MS = 1000L
     }
+}
+
+/** 缝观测日志：JUL 在 Android 自动进 logcat（tag=LT-E2E），JVM 单测里是 no-op。 */
+private object Log {
+    private val logger = Logger.getLogger("LT-E2E")
+    fun info(msg: String) = logger.info(msg)
 }
