@@ -1,0 +1,4 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 调试构建连本机模拟器宿主的明文 http/ws；生产走 https/wss（ADR 0025/0031） -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>
