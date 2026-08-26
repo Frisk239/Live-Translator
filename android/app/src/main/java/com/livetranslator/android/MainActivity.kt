@@ -44,6 +44,7 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var projectionManager: MediaProjectionManager
     private var toneTrack: AudioTrack? = null
+    private var speechPlayer: android.media.MediaPlayer? = null
 
     private val requestPerms =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { granted ->
@@ -116,10 +117,43 @@ class MainActivity : ComponentActivity() {
         toneTrack = null
     }
 
+    private fun startSpeech() {
+        stopSpeech()
+        stopTone()
+        try {
+            val attrs = android.media.AudioAttributes.Builder()
+                .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val mp = android.media.MediaPlayer()
+            mp.setAudioAttributes(attrs)
+            val afd = resources.openRawResourceFd(R.raw.en_speech)
+            mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+            afd.close()
+            mp.isLooping = true
+            mp.prepare()
+            mp.start()
+            speechPlayer = mp
+            CaptureService.pushMessage("英语素材循环播放中（USAGE_MEDIA·SPEECH）。")
+        } catch (e: Exception) {
+            CaptureService.pushMessage("素材播放失败：${e.message}")
+        }
+    }
+
+    private fun stopSpeech() {
+        speechPlayer?.let {
+            try { it.stop(); it.release() } catch (_: Exception) {}
+        }
+        speechPlayer = null
+    }
+
     @Composable
     fun SpikeApp() {
         val st by CaptureService.state.collectAsState()
+        val link by HostedLink.state.collectAsState()
         var toneOn by remember { mutableStateOf(false) }
+        var speechOn by remember { mutableStateOf(false) }
+        var feedOn by remember { mutableStateOf(false) }
 
         MaterialTheme {
             Surface(modifier = Modifier.fillMaxSize()) {
@@ -146,10 +180,32 @@ class MainActivity : ComponentActivity() {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = toneOn, onCheckedChange = {
                             toneOn = it
-                            if (it) startTone() else { stopTone(); CaptureService.pushMessage("自播测试音已关。") }
+                            if (it) { speechOn = false; startTone() } else { stopTone(); CaptureService.pushMessage("自播测试音已关。") }
                         })
                         Text("② 自播测试音（440Hz 循环）")
                     }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = speechOn, onCheckedChange = {
+                            speechOn = it
+                            if (it) { toneOn = false; startSpeech() } else { stopSpeech(); CaptureService.pushMessage("英语素材已关。") }
+                        })
+                        Text("③ 自播英语素材（11s 循环）")
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = feedOn, onCheckedChange = {
+                            feedOn = it
+                            if (it) HostedLink.start("http://10.0.2.2:8787") else HostedLink.stop()
+                        })
+                        Text("④ 推流宿主机托管 → 字幕回显")
+                    }
+                    Text(
+                        "端到端：${link.status} · 已收 ${link.events} 事件",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        link.caption.ifEmpty { "（勾④后等草稿/定稿出现在这里）" },
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
                 }
             }
         }

@@ -138,6 +138,7 @@ class CaptureService : Service() {
                     continue
                 }
                 total += n * 2L
+                HostedLink.sendPcm(buf, n) /* 端到端验证：开了推流就把抓到的混音送托管 */
                 for (i in 0 until n) {
                     val v = buf[i] / 32768.0
                     accSq += v * v
