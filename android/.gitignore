@@ -1,0 +1,11 @@
+# Gradle
+.gradle/
+build/
+app/build/
+
+# 本机 SDK 路径，各机各配
+local.properties
+
+# IDE
+.idea/
+*.iml
