@@ -525,9 +525,30 @@ def create_app(
 app = create_app()
 
 
+def _start_rss_reporter() -> None:
+    """每 5 秒把自身 RSS 打进 stdout：压测标定与生产排障看内存水位；
+    开发沙箱里 psutil 从外部读子进程会失真，自报最可靠。"""
+    try:
+        import psutil
+    except ImportError:
+        return
+    proc = psutil.Process()
+
+    def loop():
+        while True:
+            time.sleep(5)
+            try:
+                print(f"RSS {proc.memory_info().rss // 1048576}MB", flush=True)
+            except Exception:
+                return
+
+    threading.Thread(target=loop, daemon=True).start()
+
+
 if __name__ == "__main__":
     import uvicorn
 
+    _start_rss_reporter()
     uvicorn.run(
         "account:app",
         host=os.environ.get("LIVE_TRANSLATOR_HOST", "127.0.0.1"),  # TLS 在反向代理（ADR 0025）
