@@ -1,0 +1,27 @@
+# /etc/systemd/system/livetranslator.service
+# 部署步骤见 ../DEPLOY.md。Restart=on-failure：崩溃自动拉起，在听的壳会闪断自动再开（ADR 0019）。
+[Unit]
+Description=Live Translator hosted listen service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=livetranslator
+Group=livetranslator
+WorkingDirectory=/opt/livetranslator/server
+EnvironmentFile=/etc/livetranslator/livetranslator.env
+ExecStart=/opt/livetranslator/venv/bin/python account.py
+# 优雅退出：进程停接新路、已有在听在宽限窗内收尾（ADR 0026）
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+# 收紧
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/livetranslator
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

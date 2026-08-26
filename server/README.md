@@ -24,8 +24,16 @@ python -m pytest server/tests -q
 python tools/e2e_probe.py --models-dir <模型目录>
 ```
 
-生产走反向代理终结 TLS（ADR 0025），进程只听本机；壳里的源写死（ADR 0031），开发用
-`LIVE_TRANSLATOR_HOSTED_ORIGIN` 盖成 `http://127.0.0.1:8787`。
+多路压测（目标机器上标定路数 N，ADR 0015）：并发档位递增喂 PCM，量每路首草稿
+延迟与服务进程 RSS 峰值，给出建议的 `MAX_ROUTES`——
+
+```bash
+python tools/load_probe.py --models-dir <模型目录> --levels 1,2,4,6,8
+```
+
+生产部署（systemd / nginx 反代 / 环境文件 / 上线验证）见 [DEPLOY.md](./DEPLOY.md)，
+`deploy/` 目录里有样例。生产走反向代理终结 TLS（ADR 0025），进程只听本机；壳里的
+源写死（ADR 0031），开发用 `LIVE_TRANSLATOR_HOSTED_ORIGIN` 盖成 `http://127.0.0.1:8787`。
 
 ## 环境变量
 
@@ -41,8 +49,12 @@ python tools/e2e_probe.py --models-dir <模型目录>
 | `LIVE_TRANSLATOR_LOGIN_WINDOW_S` | 60 | 失败计数窗口 |
 | `LIVE_TRANSLATOR_LOGIN_COOLDOWN_S` | 300 | 暂拒时长，过一会儿自动恢复 |
 | `LIVE_TRANSLATOR_HOSTED_DRAIN_TIMEOUT_S` | 20 | 优雅退出时已有在听的宽限窗（ADR 0026） |
+| `LIVE_TRANSLATOR_TRUST_PROXY` | 关 | 反代后面开：登录限流与在听记录按 `X-Forwarded-For` 最右一跳认真实来源（ADR 0030 后续）。只在进程只接本机反代流量时开 |
+| `LIVE_TRANSLATOR_CORS_ORIGINS` | `*`（全开） | 逗号分隔白名单；生产配壳的 origin（Windows 上 `http://tauri.localhost`），见 DEPLOY.md |
 | `LIVE_TRANSLATOR_HOST` / `LIVE_TRANSLATOR_PORT` | `127.0.0.1` / `8787` | 监听地址（ADR 0025：生产只听本机） |
 | `LIVE_TRANSLATOR_MODELS` | `server/models` | 听译模型目录 |
 
-注意：登录防爆破按直连对端计数；上了反向代理后同一来源都是代理 IP，闸会全域共享，
-收敛来源需在代理层带真实 IP（暂未做，ADR 0030 后续）。
+注意：`LIVE_TRANSLATOR_TRUST_PROXY` 不开时，登录防爆破按直连对端计数；上了反向代理
+不开它，同一来源都是代理 IP，闸会全域共享（等于全服共用一个失败计数）。开了它就要求
+XFF 由可信代理追加（nginx 用 `$proxy_add_x_forwarded_for`，服务端只取最右一跳，自带
+假 XFF 骗不开闸）。

@@ -1,0 +1,42 @@
+# 反向代理样例（ADR 0025：TLS 在代理终结，进程只听 127.0.0.1:8787）
+# 三处关键：WSS 升级头、X-Forwarded-For 的 append 语义（服务端只信最右一跳，ADR 0030 后续）、
+# 读超时要大于缝的空闲超时（默认 120s），别让代理先把在听的缝掐了。
+#
+# 证书路径按机器实际替换；listen 443 http2 视 nginx 版本可写成 listen 443 ssl; http2 on;
+
+server {
+    listen 443 ssl;
+    server_name listen.example.com;  # 改成实际域名
+
+    ssl_certificate     /etc/letsencrypt/live/listen.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/listen.example.com/privkey.pem;
+
+    # 账号 JSON 与听译 WebSocket 同一个 location：都转发到本机进程
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_http_version 1.1;
+
+        # WSS：升级头必须带，否则 /listen 握手直接失败
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+
+        # append 语义（$proxy_add_x_forwarded_for）：攻击者自带的假 XFF 追加在左边，
+        # 服务端取最右一跳即本代理亲眼看到的客户端地址。不要改成 $remote_addr（会盖掉）。
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP $remote_addr;
+
+        # 大于 LIVE_TRANSLATOR_HOSTED_IDLE_TIMEOUT（默认 120s）
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+
+        # PCM 持续上行，别缓冲
+        proxy_request_buffering off;
+        proxy_buffering off;
+    }
+}
+
+server {
+    listen 80;
+    server_name listen.example.com;
+    return 301 https://$host$request_uri;
+}
