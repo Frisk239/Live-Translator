@@ -18,6 +18,8 @@ android {
         versionCode = 1
         versionName = "1.0"
 
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
         // 源写死不可改（ADR 0031）；调试构建连本机模拟器宿主（10.0.2.2 = 宿主 loopback）
         buildConfigField("String", "HOSTED_HTTP", "\"" + hostedHttp + "\"")
         buildConfigField("String", "HOSTED_WS", "\"" + hostedWs + "\"")
@@ -56,8 +58,10 @@ dependencies {
     testImplementation(libs.robolectric)
     testImplementation(libs.coroutines.test)
 
+    androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.test.junit)
     androidTestImplementation(libs.espresso.core)
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 }

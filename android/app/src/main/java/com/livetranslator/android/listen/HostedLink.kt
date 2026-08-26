@@ -23,6 +23,8 @@ class HostedLink(
     private val source: String,
     private val listener: Listener,
     private val client: OkHttpClient = OkHttpClient(),
+    /** 单测注入：重试退避等待（生产 Thread.sleep） */
+    private val sleeper: (Long) -> Unit = { Thread.sleep(it) },
 ) {
     interface Listener {
         fun onEvent(text: String)
@@ -94,6 +96,13 @@ class HostedLink(
                 retryOrFail()
             }
 
+            override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                // 服务端主动关闭走这里（OkHttp 不自动回应），回个 close 再按断线处理
+                feeding.set(false)
+                webSocket.close(1000, null)
+                if (!closedByUs) retryOrFail()
+            }
+
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 feeding.set(false)
                 if (!closedByUs) retryOrFail()
@@ -110,7 +119,7 @@ class HostedLink(
         val backoffMs = RETRY_BASE_MS shl (retries - 1) // 1s,2s,4s,8s,8s ≈ 桌面 5 次量级
         Thread {
             try {
-                Thread.sleep(backoffMs)
+                sleeper(backoffMs)
             } catch (_: InterruptedException) {
                 return@Thread
             }
