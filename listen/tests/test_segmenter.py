@@ -1,7 +1,7 @@
 """切条状态机与语言稳定性的测试。
 
 纯逻辑用例不碰模型；最后一条集成回归用真实英语 PCM 复现自动语言判断。
-pytest 跑：cd desktop && python -m pytest engine/tests -q
+pytest 跑：python -m pytest listen/tests -q（原在 desktop/engine/tests，随 listen 成为共享包搬来）
 """
 import os
 import re
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from listen import engine as rl  # noqa: E402
 
 
@@ -767,7 +767,7 @@ def test_english_fixture_never_emits_japanese_orig(monkeypatch):
     import numpy as np
 
     pytest.importorskip("soundfile")
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[2] / "desktop"  # 素材在 desktop/tests/fixtures
     models = Path(
         os.environ.get(
             "LT_ENGINE_MODELS",
@@ -855,7 +855,7 @@ def test_real_engine_keeps_japanese_and_korean_fixtures_in_their_source_language
     import numpy as np
 
     pytest.importorskip("soundfile")
-    root = Path(__file__).resolve().parents[2]
+    root = Path(__file__).resolve().parents[2] / "desktop"  # 素材在 desktop/tests/fixtures
     models = Path(
         os.environ.get(
             "LT_ENGINE_MODELS",
