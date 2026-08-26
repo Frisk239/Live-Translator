@@ -76,6 +76,69 @@ describe("字幕条：草稿、定稿、切条、静默撤条", () => {
   });
 });
 
+describe("同条二次定稿：译文后到只换译文，不闪不撤", () => {
+  it("空译文定稿后 LLM 译文落地：只换译文、定稿时刻不动、撤条从落地重算", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "boss fight", trans: "" } });
+    const finalAt = s.bar!.finalAt;
+    s = reduce(s, tick(1400)); // 译文 1.4s 后落地，条还亮着
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "boss fight", trans: "Boss 战" } });
+    expect(s.bar).toMatchObject({ orig: "boss fight", trans: "Boss 战", kind: "final" });
+    expect(s.bar!.finalAt, "定稿时刻不重置（句末→定稿按首条计）").toBe(finalAt);
+    // 换版落地后至少再亮满两秒，不是从首条定稿起算
+    s = reduce(s, tick(SILENT_WITHDRAW_MS - 1));
+    expect(s.bar, "译文刚落地不满两秒不撤").not.toBeNull();
+    s = reduce(s, tick(1));
+    expect(s.bar).toBeNull();
+  });
+
+  it("流式生长（前缀延长）不算换版，不顺延撤条", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "老大" } });
+    const from = s.bar!.withdrawFrom;
+    s = reduce(s, tick(500));
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "老大争斗" } });
+    expect(s.bar!.withdrawFrom, "前缀延长不重置").toBe(from);
+    expect(s.bar!.withdrawResets).toBe(0);
+    s = reduce(s, tick(SILENT_WITHDRAW_MS - 500));
+    expect(s.bar, "从首条定稿起算撤").toBeNull();
+  });
+
+  it("换版顺延每条最多两次，第三次不再钉住条", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "一版" } });
+    s = reduce(s, tick(1800));
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "二版完全不同" } });
+    s = reduce(s, tick(1800));
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "三版又不同" } });
+    expect(s.bar!.withdrawResets).toBe(2);
+    const frozenFrom = s.bar!.withdrawFrom;
+    s = reduce(s, tick(1800));
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "四版还在变" } });
+    expect(s.bar!.withdrawResets, "第三次起不再顺延").toBe(2);
+    expect(s.bar!.withdrawFrom).toBe(frozenFrom);
+    s = reduce(s, tick(SILENT_WITHDRAW_MS));
+    expect(s.bar).toBeNull();
+  });
+
+  it("定稿后同原文的草稿（流式写回）只更新译文，不降级回草稿", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "" } });
+    s = reduce(s, { type: "listen", event: { type: "draft", orig: "a", trans: "流式译文" } });
+    expect(s.bar).toMatchObject({ orig: "a", trans: "流式译文", kind: "final" });
+  });
+
+  it("新一条定稿照常重建，定稿时刻从头算", () => {
+    let s = startListening(freshState());
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "a", trans: "甲" } });
+    const firstAt = s.bar!.finalAt;
+    s = reduce(s, tick(300));
+    s = reduce(s, { type: "listen", event: { type: "final", orig: "b", trans: "乙" } });
+    expect(s.bar!.finalAt, "不同原文是新条").toBeGreaterThan(firstAt!);
+    expect(s.bar!.withdrawResets).toBe(0);
+  });
+});
+
 describe("四类失败态的出口", () => {
   it("没人声：画面不出东西，面板状态行说明", () => {
     let s = startListening(freshState());

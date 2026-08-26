@@ -17,7 +17,12 @@ export interface SubtitleBar {
   orig: string;
   trans: string;
   kind: "draft" | "final";
+  /** 首条定稿的时刻，红线计时口径；同条二次落地不重置（ADR 路线第 2 步） */
   finalAt: number | null;
+  /** 静默撤条从这起算；同条换版（译文后到）会顺延，观众读到的最后一版至少亮满两秒 */
+  withdrawFrom: number;
+  /** 换版顺延次数，每条最多 2 次（与引擎 _touch_hold_for_revise 同口径，防长流把条钉死屏上） */
+  withdrawResets: number;
 }
 
 export interface PanelStatus {
@@ -143,7 +148,11 @@ export function reduce(state: ShellState, action: ShellAction): ShellState {
 
 function withClock(state: ShellState, now: number): ShellState {
   let next: ShellState = { ...state, now };
-  if (next.bar?.kind === "final" && next.bar.finalAt !== null && now - next.bar.finalAt >= SILENT_WITHDRAW_MS) {
+  if (
+    next.bar?.kind === "final" &&
+    next.bar.finalAt !== null &&
+    now - next.bar.withdrawFrom >= SILENT_WITHDRAW_MS
+  ) {
     next = { ...next, bar: null };
   }
   if (next.hint !== null && next.hintUntil !== null && now >= next.hintUntil) {
@@ -186,13 +195,40 @@ function applyListenEvent(state: ShellState, event: ListenEvent): ShellState {
   switch (event.type) {
     case "draft": {
       // 提示行由自己的计时拿掉（原型同款）：换音源提示要活得过紧接着的新草稿
-      return { ...state, bar: { orig: event.orig, trans: event.trans, kind: "draft" as const, finalAt: null } };
-    }
-    case "final":
+      const prev = state.bar;
+      if (prev?.kind === "final" && prev.orig === event.orig) {
+        // 定稿后同原文的草稿（流式译文写回）只更新译文，不把条降级回草稿
+        return { ...state, bar: { ...prev, trans: event.trans } };
+      }
       return {
         ...state,
-        bar: { orig: event.orig, trans: event.trans, kind: "final", finalAt: state.now },
+        bar: { orig: event.orig, trans: event.trans, kind: "draft" as const, finalAt: null, withdrawFrom: 0, withdrawResets: 0 },
       };
+    }
+    case "final": {
+      const prev = state.bar;
+      if (prev?.kind === "final" && prev.orig === event.orig) {
+        // 同一条定稿的二次落地（LLM 译文/改写后到）：只换译文。
+        // 定稿时刻不重置（句末→定稿按首条计）；换版落地顺延撤条计时，
+        // 流式生长（前缀延长）不算换版；prev 为空串时恒是换版（引擎同款坑）。
+        const grew = prev.trans !== "" && event.trans.startsWith(prev.trans);
+        const changed = event.trans !== prev.trans;
+        const reset = changed && !grew && prev.withdrawResets < 2;
+        return {
+          ...state,
+          bar: {
+            ...prev,
+            trans: event.trans,
+            withdrawFrom: reset ? state.now : prev.withdrawFrom,
+            withdrawResets: prev.withdrawResets + (reset ? 1 : 0),
+          },
+        };
+      }
+      return {
+        ...state,
+        bar: { orig: event.orig, trans: event.trans, kind: "final", finalAt: state.now, withdrawFrom: state.now, withdrawResets: 0 },
+      };
+    }
     case "notice":
       return applyNotice(state, event.kind);
   }
