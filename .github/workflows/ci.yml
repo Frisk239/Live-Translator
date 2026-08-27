@@ -1,5 +1,6 @@
-# CI（GitHub 恢复可达后 push 即生效；当前本地开发用 scripts/check-all.ps1）
+# CI：python / frontend / rust / android 四 job。本地开发另有 scripts/check-all.ps1（口径对齐）。
 # 真模型用例在 CI 自动跳过（缺模型/缺 sherpa 的 pytest skip 策略），跑的是纯逻辑与假缝。
+# android job 只跑 JVM 单测（testDebugUnitTest）；androidTest 需要设备，不进 CI。
 name: ci
 
 on:
@@ -52,3 +53,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
+
+  android:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      # JVM 单测不需要真机；compileSdk 缺件由 AGP 自动下载（runner 的 SDK license 已预接受）
+      - run: ./gradlew testDebugUnitTest --console=plain --no-daemon
