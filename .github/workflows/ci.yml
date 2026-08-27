@@ -51,6 +51,11 @@ jobs:
         working-directory: desktop/src-tauri
     steps:
       - uses: actions/checkout@v4
+      # ws_connect 集成测试 spawn PATH 上的 python 跑 real_listen.py（import websockets，不碰模型）
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install websockets
       - uses: dtolnay/rust-toolchain@stable
       - run: cargo test
 
