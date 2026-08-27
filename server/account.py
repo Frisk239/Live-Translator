@@ -17,6 +17,7 @@ import secrets
 import sys
 import threading
 import time
+import traceback
 from collections import deque
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -494,7 +495,7 @@ def create_app(
         except asyncio.CancelledError:
             pass  # 被顶 / 登录作废 / 连接被收回：notice 已由挤掉的一方发出，收尾全在 finally
         except Exception:
-            pass
+            traceback.print_exc()  # 意外异常：打栈留痕再按网断收尾（名额在 finally 放出）
         finally:
             # 收尾若又被取消（取消可以重复投递），退到纯同步收尾，不再 await
             cancelled = False
