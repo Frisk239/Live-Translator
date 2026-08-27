@@ -576,7 +576,7 @@ fn kick_off_local_runtime(app: &AppHandle) {
     let resource_dir = st.resource_dir.clone();
     let models_on_disk = fake || models::all_present(&models_dir);
     if models_on_disk {
-        let (port, child) = listen::spawn_listen(
+        let (port, child, err) = listen::spawn_listen(
             fake,
             if fake { None } else { Some(&models_dir) },
             resource_dir.as_deref(),
@@ -588,7 +588,10 @@ fn kick_off_local_runtime(app: &AppHandle) {
             notify(
                 app,
                 "直播同传工具",
-                "听译没起来。安装包请重装；开发形态请检查 Python。",
+                &format!(
+                    "听译没起来：{}。",
+                    err.unwrap_or_else(|| "未知原因".into())
+                ),
             );
         }
         if !fake {
@@ -635,7 +638,7 @@ fn start_model_download(app: AppHandle) {
                 return;
             }
             let resource_dir = app.state::<AppState>().resource_dir.clone();
-            let (port, child) = listen::spawn_listen(false, Some(&dir), resource_dir.as_deref());
+            let (port, child, err) = listen::spawn_listen(false, Some(&dir), resource_dir.as_deref());
             if let Some(port) = port {
                 app.state::<AppState>().listen.lock().unwrap().port = Some(port);
                 *app.state::<AppState>().child.lock().unwrap() = child;
@@ -643,7 +646,7 @@ fn start_model_download(app: AppHandle) {
                 notify(
                     &app,
                     "直播同传工具",
-                    "听译没起来。安装包请重装；开发形态请检查 Python。",
+                    &format!("听译没起来：{}。", err.unwrap_or_else(|| "未知原因".into())),
                 );
             }
         }
@@ -741,11 +744,14 @@ fn main() {
                 fake,
                 models_ready_on_disk,
             ) {
-                let (port, child) = listen::spawn_listen(
+                let (port, child, err) = listen::spawn_listen(
                     fake,
                     if fake { None } else { Some(&models_dir) },
                     resource_dir.as_deref(),
                 );
+                if let Some(e) = err {
+                    eprintln!("[listen] 启动即失败：{e}");
+                }
                 (port, child)
             } else {
                 (None, None) // 本机下载完成后 / 改回本机时再 spawn

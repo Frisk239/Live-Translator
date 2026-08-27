@@ -149,14 +149,14 @@ pub fn should_download_local(listen_way: &str, model_ready: bool) -> bool {
 }
 
 /// 起听译进程（假 = fake-listen/fake_listen.py，真 = engine/real_listen.py）。
-/// 返回它绑定的端口；READY 行没等到就放弃（开听时面板会显示失败原因）。
+/// 返回 (绑定端口, 子进程, 失败原因)：READY 没等到时 port 为 None，原因进第三项（开听时面板显示）。
 pub fn spawn_listen(
     fake: bool,
     models_dir: Option<&Path>,
     resource_dir: Option<&Path>,
-) -> (Option<u16>, Option<std::process::Child>) {
+) -> (Option<u16>, Option<std::process::Child>, Option<String>) {
     let Some((python, script_path)) = resolve_engine(fake, resource_dir) else {
-        return (None, None);
+        return (None, None, Some("找不到 Python 或引擎脚本（安装包请重装）".into()));
     };
 
     #[cfg(windows)]
@@ -185,11 +185,11 @@ pub fn spawn_listen(
     }
     let mut child = match cmd
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
     {
         Ok(c) => c,
-        Err(_) => return (None, None),
+        Err(e) => return (None, None, Some(format!("引擎进程起不来（{}）：{e}", python.display()))),
     };
     // 崩溃兜底：进 Job，壳死了 OS 连带孩子一起收
     #[cfg(windows)]
@@ -204,19 +204,46 @@ pub fn spawn_listen(
         }
     }
 
-    use std::io::BufRead;
-    if let Some(stdout) = child.stdout.take() {
-        let reader = std::io::BufReader::new(stdout);
-        for line in reader.lines() {
-            let Ok(line) = line else { break };
-            if let Some(rest) = line.strip_prefix("READY ") {
-                if let Ok(port) = rest.trim().parse::<u16>() {
-                    return (Some(port), Some(child));
-                }
+    // Python 的 traceback 打到 stderr：转发到壳的 stderr（开发形态可见），不再一丢了之
+    if let Some(stderr) = child.stderr.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stderr).lines().map_while(|l| l.ok()) {
+                eprintln!("[engine] {line}");
             }
+        });
+    }
+
+    // READY 在 WS 绑定后立刻打印（模型加载是引擎的后台任务），等待只需盖住解释器启动；
+    // 读线程拿到 READY 后继续 drain，不退出——引擎后续输出写满管道会把孩子堵死
+    let (tx, rx) = std::sync::mpsc::channel::<u16>();
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines().map_while(|l| l.ok()) {
+                if let Some(rest) = line.strip_prefix("READY ") {
+                    if let Ok(port) = rest.trim().parse::<u16>() {
+                        let _ = tx.send(port);
+                        continue;
+                    }
+                }
+                eprintln!("[engine] {line}");
+            }
+        });
+    }
+    match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+        Ok(port) => (Some(port), Some(child), None),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            (None, None, Some("引擎 30 秒内没就绪，已把它收掉。稍后重开应用会再试".into()))
+        }
+        // 输出流先结束：进程退出（多为缺依赖秒崩），traceback 已在壳的 stderr（[engine] 开头）
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            let _ = child.wait();
+            (None, None, Some("引擎起来了又立刻退出，开发形态看壳的 stderr 日志查缺什么".into()))
         }
     }
-    (None, Some(child))
 }
 
 fn connection_state<R: tauri::Runtime>(

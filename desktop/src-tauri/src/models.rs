@@ -89,7 +89,14 @@ where
     F: FnMut(f64) + Send,
 {
     let client = reqwest::Client::builder()
-        .user_agent("live-translator-desktop/0.1")
+        .user_agent(concat!(
+            "live-translator-desktop/",
+            env!("CARGO_PKG_VERSION")
+        ))
+        // 模型文件几百 MB：不限总时长，但连接 30s / 单次读 60s 到点即断，
+        // 否则镜像源 stalled 后下载会永远挂在 Downloading（reqwest 默认无超时）
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .read_timeout(std::time::Duration::from_secs(60))
         .build()
         .map_err(|e| e.to_string())?;
 
